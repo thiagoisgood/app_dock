@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:app_dock}",
+      "name": "Debug AppDockAuditEngine",
+      "target": "AppDockAuditEngine",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug AppDockAuditEngine"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:app_dock}",
+      "name": "Release AppDockAuditEngine",
+      "target": "AppDockAuditEngine",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release AppDockAuditEngine"
+    }
+  ]
+}
