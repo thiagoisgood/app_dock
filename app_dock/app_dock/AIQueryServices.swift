@@ -149,3 +149,115 @@ struct AIProviderRouter {
         }
     }
 }
+
+// MARK: - AI Tagging Service
+
+struct AITaggingService {
+    func generateTags(for apps: [AppRecord], config: AIProviderConfig) async throws -> [String: [String]] {
+        let appList = apps.map { "- \($0.name) (\($0.bundleID ?? "unknown"))" }.joined(separator: "\n")
+        let prompt = """
+        请为以下 macOS 应用生成语义标签，每个应用 2-5 个标签。
+        标签应描述应用的用途场景（如"编程"、"设计"、"写作"、"协作"、"娱乐"等）。
+
+        返回纯 JSON，格式如下（不要其他文字）：
+        {"应用名": ["标签1", "标签2", ...], ...}
+
+        应用列表：
+        \(appList)
+        """
+
+        let adapter = OpenAICompatibleAdapter()
+        let response = try await adapter.complete(prompt: prompt, payload: Data("[]".utf8), config: config)
+
+        guard let start = response.firstIndex(of: "{"),
+              let end = response.lastIndex(of: "}"),
+              let data = String(response[start...end]).data(using: .utf8),
+              let tags = try? JSONDecoder().decode([String: [String]].self, from: data) else {
+            return [:]
+        }
+        return tags
+    }
+}
+
+// MARK: - Natural Language Search
+
+struct AINaturalLanguageSearch {
+    private let synonymMap: [String: [String]] = [
+        "编程": ["代码", "开发", "IDE", "编辑器", "终端", "git", "docker", "编译", "debug"],
+        "设计": ["UI", "UX", "绘图", "原型", "插画", "图形", "色彩"],
+        "写作": ["文档", "笔记", "文本", "markdown", "文字处理"],
+        "办公": ["表格", "幻灯片", "演示", "日历", "邮件", "会议"],
+        "娱乐": ["游戏", "音乐", "视频", "播放", "流媒体"],
+        "沟通": ["聊天", "消息", "通话", "社交"],
+        "安全": ["密码", "加密", "VPN", "杀毒", "防火墙"],
+        "效率": ["启动器", "快捷键", "自动化", "剪贴板", "任务管理"],
+        "浏览": ["浏览器", "网页", "下载"],
+        "媒体": ["图片", "照片", "视频编辑", "音频", "录屏"],
+    ]
+
+    func matchApps(query: String, tags: [String: [String]], apps: [AppRecord]) -> [AppRecord] {
+        let queryLower = query.lowercased()
+        let queryTokens = tokenize(queryLower)
+
+        // Expand query with synonyms
+        var expandedTerms = Set(queryTokens)
+        for token in queryTokens {
+            for (key, synonyms) in synonymMap {
+                if key.contains(token) || token.contains(key) {
+                    expandedTerms.formUnion(synonyms.map { $0.lowercased() })
+                    expandedTerms.insert(key)
+                }
+                for syn in synonyms {
+                    if syn.lowercased().contains(token) || token.contains(syn.lowercased()) {
+                        expandedTerms.insert(key)
+                        expandedTerms.formUnion(synonyms.map { $0.lowercased() })
+                    }
+                }
+            }
+        }
+
+        // Score each app by tag match
+        var scored: [(app: AppRecord, score: Int)] = []
+        for app in apps {
+            let appTags = (tags[app.name] ?? []).map { $0.lowercased() }
+            guard !appTags.isEmpty else { continue }
+            var score = 0
+            for tag in appTags {
+                for term in expandedTerms {
+                    if tag.contains(term) || term.contains(tag) {
+                        score += 1
+                    }
+                }
+            }
+            if score > 0 {
+                scored.append((app, score))
+            }
+        }
+
+        return scored.sorted { $0.score > $1.score }.map(\.app)
+    }
+
+    private func tokenize(_ text: String) -> [String] {
+        // Split by common separators and CJK character boundaries
+        var tokens: [String] = []
+        var current = ""
+        for char in text {
+            if char.isLetter || char.isNumber {
+                current.append(char)
+            } else {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+                // CJK characters as individual tokens
+                if char.unicodeScalars.contains(where: { $0.value > 0x4E00 && $0.value < 0x9FFF }) {
+                    tokens.append(String(char))
+                }
+            }
+        }
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
+    }
+}
