@@ -38,6 +38,11 @@ struct AppScanner {
 
 struct SourceAuditService {
     func source(for appURL: URL) -> AppSource {
+        let path = appURL.path
+        // macOS system apps live under /System/Applications
+        if path.hasPrefix("/System/Applications") || path.hasPrefix("/System/Library") {
+            return .system
+        }
         let receiptPath = appURL.appendingPathComponent("Contents/_MASReceipt/receipt").path
         if FileManager.default.fileExists(atPath: receiptPath) {
             return .appStore

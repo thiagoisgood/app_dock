@@ -1,12 +1,14 @@
 import Foundation
 
 enum AppSource: String, Codable, CaseIterable {
+    case system
     case appStore
     case thirdParty
     case unknown
 
     var displayLabel: String {
         switch self {
+        case .system: return "系统"
         case .appStore: return "App Store"
         case .thirdParty: return "第三方"
         case .unknown: return "未知"

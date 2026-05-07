@@ -154,28 +154,70 @@ struct AIProviderRouter {
 
 struct AITaggingService {
     func generateTags(for apps: [AppRecord], config: AIProviderConfig) async throws -> [String: [String]] {
-        let appList = apps.map { "- \($0.name) (\($0.bundleID ?? "unknown"))" }.joined(separator: "\n")
-        let prompt = """
-        请为以下 macOS 应用生成语义标签，每个应用 2-5 个标签。
-        标签应描述应用的用途场景（如"编程"、"设计"、"写作"、"协作"、"娱乐"等）。
+        // Batch apps to avoid exceeding token limits
+        let batchSize = 30
+        var allTags: [String: [String]] = [:]
 
-        返回纯 JSON，格式如下（不要其他文字）：
-        {"应用名": ["标签1", "标签2", ...], ...}
+        for batchStart in stride(from: 0, to: apps.count, by: batchSize) {
+            let batch = Array(apps[batchStart..<min(batchStart + batchSize, apps.count)])
+            let appList = batch.map { "- \($0.name) (\($0.bundleID ?? "unknown"))" }.joined(separator: "\n")
+            let prompt = """
+            请为以下 macOS 应用生成语义标签，每个应用 2-5 个标签。
+            标签应描述应用的用途场景，使用中文标签（如"编程"、"设计"、"写作"、"协作"、"娱乐"、"浏览器"、"系统工具"等）。
 
-        应用列表：
-        \(appList)
-        """
+            重要：返回纯 JSON，不要包含 markdown 代码块标记。格式如下：
+            {"应用名": ["标签1", "标签2", ...], ...}
 
-        let adapter = OpenAICompatibleAdapter()
-        let response = try await adapter.complete(prompt: prompt, payload: Data("[]".utf8), config: config)
+            应用列表：
+            \(appList)
+            """
 
-        guard let start = response.firstIndex(of: "{"),
-              let end = response.lastIndex(of: "}"),
-              let data = String(response[start...end]).data(using: .utf8),
-              let tags = try? JSONDecoder().decode([String: [String]].self, from: data) else {
-            return [:]
+            let adapter = OpenAICompatibleAdapter()
+            let response = try await adapter.complete(prompt: prompt, payload: Data("[]".utf8), config: config)
+            print("[AI] Tagging batch \(batchStart/batchSize + 1) response length: \(response.count)")
+
+            // Robust JSON extraction: strip code fences if present
+            var cleanResponse = response
+            if let codeStart = cleanResponse.range(of: "```") {
+                let afterFence = cleanResponse[codeStart.upperBound...]
+                if let codeEnd = afterFence.range(of: "```") {
+                    cleanResponse = String(afterFence[afterFence.startIndex..<codeEnd.lowerBound])
+                    // Remove optional "json" language tag
+                    if cleanResponse.hasPrefix("json") {
+                        cleanResponse = String(cleanResponse.dropFirst(4))
+                    }
+                }
+            }
+
+            guard let start = cleanResponse.firstIndex(of: "{"),
+                  let end = cleanResponse.lastIndex(of: "}"),
+                  let data = String(cleanResponse[start...end]).data(using: .utf8) else {
+                print("[AI] Tagging: no JSON found in response. Prefix: \(response.prefix(150))")
+                continue
+            }
+
+            do {
+                let tags = try JSONDecoder().decode([String: [String]].self, from: data)
+                print("[AI] Tagging batch decoded: \(tags.count) apps")
+                for (key, value) in tags {
+                    allTags[key] = value
+                }
+            } catch {
+                print("[AI] Tagging decode error: \(error)")
+                // Try to decode one by one to salvage partial results
+                if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    for (key, value) in dict {
+                        if let tags = value as? [String] {
+                            allTags[key] = tags
+                        }
+                    }
+                    print("[AI] Tagging partial salvage: \(allTags.count) apps")
+                }
+            }
         }
-        return tags
+
+        print("[AI] Tagging complete: \(allTags.count) total apps tagged")
+        return allTags
     }
 }
 
@@ -183,21 +225,23 @@ struct AITaggingService {
 
 struct AINaturalLanguageSearch {
     private let synonymMap: [String: [String]] = [
-        "编程": ["代码", "开发", "IDE", "编辑器", "终端", "git", "docker", "编译", "debug"],
-        "设计": ["UI", "UX", "绘图", "原型", "插画", "图形", "色彩"],
-        "写作": ["文档", "笔记", "文本", "markdown", "文字处理"],
-        "办公": ["表格", "幻灯片", "演示", "日历", "邮件", "会议"],
-        "娱乐": ["游戏", "音乐", "视频", "播放", "流媒体"],
-        "沟通": ["聊天", "消息", "通话", "社交"],
+        "编程": ["代码", "开发", "IDE", "编辑器", "终端", "git", "docker", "编译", "debug", "xcode", "cursor", "vscode", "code"],
+        "设计": ["UI", "UX", "绘图", "原型", "插画", "图形", "色彩", "figma", "sketch", "photoshop"],
+        "写作": ["文档", "笔记", "文本", "markdown", "文字处理", "notion", "obsidian"],
+        "办公": ["表格", "幻灯片", "演示", "日历", "邮件", "会议", "excel", "word", "powerpoint"],
+        "娱乐": ["游戏", "音乐", "视频", "播放", "流媒体", "steam", "spotify", "vlc"],
+        "沟通": ["聊天", "消息", "通话", "社交", "微信", "slack", "discord", "zoom"],
         "安全": ["密码", "加密", "VPN", "杀毒", "防火墙"],
-        "效率": ["启动器", "快捷键", "自动化", "剪贴板", "任务管理"],
-        "浏览": ["浏览器", "网页", "下载"],
+        "效率": ["启动器", "快捷键", "自动化", "剪贴板", "任务管理", "alfred", "raycast"],
+        "浏览": ["浏览器", "网页", "下载", "safari", "chrome", "firefox"],
         "媒体": ["图片", "照片", "视频编辑", "音频", "录屏"],
+        "系统": ["设置", "清理", "监控", "管理", "活动监视器", "finder"],
     ]
 
     func matchApps(query: String, tags: [String: [String]], apps: [AppRecord]) -> [AppRecord] {
         let queryLower = query.lowercased()
         let queryTokens = tokenize(queryLower)
+        guard !queryTokens.isEmpty else { return [] }
 
         // Expand query with synonyms
         var expandedTerms = Set(queryTokens)
@@ -216,29 +260,43 @@ struct AINaturalLanguageSearch {
             }
         }
 
-        // Score each app by tag match
+        print("[Search] Query: '\(query)' -> tokens: \(queryTokens) -> expanded: \(expandedTerms)")
+
+        // Score each app by tag match AND name/bundleID match
         var scored: [(app: AppRecord, score: Int)] = []
         for app in apps {
-            let appTags = (tags[app.name] ?? []).map { $0.lowercased() }
-            guard !appTags.isEmpty else { continue }
             var score = 0
+
+            // Tag-based matching
+            let appTags = (tags[app.name] ?? []).map { $0.lowercased() }
             for tag in appTags {
                 for term in expandedTerms {
                     if tag.contains(term) || term.contains(tag) {
-                        score += 1
+                        score += 2  // Tags get higher weight
                     }
                 }
             }
+
+            // Name/bundleID matching (fallback when no tags)
+            let nameLower = app.name.lowercased()
+            let bundleLower = (app.bundleID ?? "").lowercased()
+            for term in expandedTerms {
+                if nameLower.contains(term) || bundleLower.contains(term) {
+                    score += 1
+                }
+            }
+
             if score > 0 {
                 scored.append((app, score))
             }
         }
 
-        return scored.sorted { $0.score > $1.score }.map(\.app)
+        let results = scored.sorted { $0.score > $1.score }.map(\.app)
+        print("[Search] Found \(results.count) apps for '\(query)'")
+        return results
     }
 
     private func tokenize(_ text: String) -> [String] {
-        // Split by common separators and CJK character boundaries
         var tokens: [String] = []
         var current = ""
         for char in text {

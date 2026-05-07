@@ -91,14 +91,18 @@ final class DashboardViewModel: ObservableObject {
             maxTokens: 2000
         )
 
+        print("[AI] Starting background tasks with model: \(config.model), baseURL: \(config.baseURL)")
+
         // 1. AI tag generation
         aiProcessingProgress = "正在生成应用标签..."
         do {
             let tags = try await taggingService.generateTags(for: apps, config: config)
+            print("[AI] Tagging returned \(tags.count) app tags")
             appTags = tagStore.merging(tags, into: appTags)
             tagStore.save(appTags)
         } catch {
-            // Continue even if tagging fails
+            print("[AI] Tagging failed: \(error.localizedDescription)")
+            aiProcessingProgress = "标签生成失败: \(error.localizedDescription)"
         }
 
         // 2. AI organization
@@ -111,13 +115,14 @@ final class DashboardViewModel: ObservableObject {
 
         // 4. Build AI assistant summary
         aiAssistantText = buildAIAssistantSummary()
+        print("[AI] Background tasks complete. Tags: \(appTags.count) apps, Categories: \(aiCategories.count)")
     }
 
     private func buildAIAssistantSummary() -> String {
         var lines: [String] = []
         lines.append("📊 应用总览: \(apps.count) 个应用")
         let bgCount = apps.filter { $0.permissions.backgroundResident }.count
-        lines.append("• App Store: \(apps.filter { $0.source == .appStore }.count) | 第三方: \(apps.filter { $0.source == .thirdParty }.count)")
+        lines.append("• 系统: \(systemCount) | App Store: \(appStoreCount) | 第三方: \(thirdPartyCount)")
         lines.append("• 后台常驻: \(bgCount) | 高风险: \(findings.filter { $0.level == .high }.count)")
         if !aiCategories.isEmpty {
             let topCategories = Dictionary(grouping: aiCategories.values) { $0 }
@@ -166,60 +171,150 @@ final class DashboardViewModel: ObservableObject {
             apiKey: apiKey,
             baseURL: baseURL.isEmpty ? "https://api.openai.com/v1" : baseURL,
             model: model.isEmpty ? "gpt-4o-mini" : model,
-            temperature: 0.3,
-            maxTokens: 1600
+            temperature: 0.2,
+            maxTokens: 2400
         )
 
-        let appList = filteredApps().map { "- \($0.name) (\($0.version))" }.joined(separator: "\n")
-        aiOrganizationProgress = "正在请求 AI 分类..."
+        let adapter = OpenAICompatibleAdapter()
+        var allCategories: [String: String] = [:]
+        var allDescriptions: [String: String] = [:]
 
-        let prompt = """
-        你是一位 macOS 系统管理员，请将以下应用按用途智能分类。
-
-        要求：
-        1. 从以下类别中选择最合适的（可以新增类别）：
-           - 开发工具（IDE、编译器、终端、版本控制等）
-           - 设计创作（设计、绘图、视频编辑、音频制作等）
-           - 办公效率（文档、笔记、表格、演示等）
-           - 沟通协作（聊天、邮件、视频会议等）
-           - 系统工具（清理、监控、文件管理、启动器等）
-           - 网络浏览（浏览器、下载工具、VPN等）
-           - 安全隐私（密码管理、杀毒、加密等）
-           - 娱乐影音（音乐、视频、游戏等）
-           - 教育学习（学习、阅读、编程练习等）
-           - 其他
-
-        2. 返回纯 JSON，格式如下（不要其他文字）：
-        {
-          "appCategories": {"应用名": "类别", ...},
-          "categoryDescriptions": {"类别名": "一句话描述该类别", ...}
+        // Batch apps in groups of 25 for better accuracy
+        let targetApps = filteredApps()
+        let batchSize = 25
+        let batches = stride(from: 0, to: targetApps.count, by: batchSize).map {
+            Array(targetApps[$0..<min($0 + batchSize, targetApps.count)])
         }
 
-        应用列表：
-        \(appList)
-        """
+        for (index, batch) in batches.enumerated() {
+            aiOrganizationProgress = "正在分类 \(index + 1)/\(batches.count) 批..."
 
-        let adapter = OpenAICompatibleAdapter()
-        let payload = Data("[]".utf8)
-        do {
-            let response = try await adapter.complete(prompt: prompt, payload: payload, config: config)
-            aiOrganizationProgress = "正在解析分类结果..."
-            if let jsonData = extractJSON(from: response) {
-                // Try new structured format first
-                if let parsed = try? JSONDecoder().decode(AIOrganizationResponse.self, from: jsonData) {
-                    aiCategories = parsed.appCategories
-                    aiCategoryDescriptions = parsed.categoryDescriptions
+            // Build rich context for each app
+            let appEntries = batch.map { app -> String in
+                let perms = app.permissions.requested.map(\.rawValue).joined(separator: ",")
+                let bgFlag = app.permissions.backgroundResident ? "是" : "否"
+                let sourceLabel: String
+                switch app.source {
+                case .system: sourceLabel = "macOS系统自带"
+                case .appStore: sourceLabel = "App Store"
+                case .thirdParty: sourceLabel = "第三方"
+                case .unknown: sourceLabel = "未知"
                 }
-                // Fallback to old format
-                else if let parsed = try? JSONDecoder().decode([String: String].self, from: jsonData) {
-                    aiCategories = parsed
-                }
-                if groupingMode == .byAI {
-                    rebuildListSections()
-                }
+                return """
+                  {
+                    "name": "\(app.name)",
+                    "bundleID": "\(app.bundleID ?? "unknown")",
+                    "version": "\(app.version)",
+                    "source": "\(sourceLabel)",
+                    "background": \(bgFlag),
+                    "permissions": "[\(perms)]"
+                  }
+                """
             }
-        } catch {
-            aiOrganizationProgress = "分类失败，可重试"
+
+            let prompt = """
+            你是一位资深 macOS 系统管理员，精通 Apple 生态。请根据以下应用的 **名称、Bundle ID、来源、权限** 等元数据，将每个应用归入最合适的类别。
+
+            ## 分类规则
+
+            1. 优先使用以下预设类别（可根据应用特点新增更精确的类别）：
+               - **开发工具**: IDE、编译器、终端、数据库、版本控制、容器、调试器。例: Xcode, VS Code, iTerm2, Docker, Git, Postman
+               - **设计创作**: UI/UX 设计、图片编辑、视频剪辑、音频制作、3D 建模、字体工具。例: Figma, Sketch, Photoshop, Final Cut, Blender
+               - **办公效率**: 文档编辑、笔记、表格、演示、项目管理、日历、邮件客户端。例: Notion, Obsidian, Microsoft Office, Things, Fantastical
+               - **沟通协作**: 即时通讯、视频会议、团队协作、社交网络。例: 微信, Slack, Zoom, Discord, Telegram
+               - **系统工具**: macOS 系统组件、清理工具、监控、启动器、文件管理、输入法、系统偏好设置。例: Activity Monitor, Alfred, Raycast, CleanMyMac, 搜狗输入法
+               - **网络浏览**: 浏览器、下载管理器、代理工具、VPN。例: Safari, Chrome, Firefox, Downie, Surge
+               - **安全隐私**: 密码管理、杀毒软件、加密工具、防火墙、隐私保护。例: 1Password, Bitwarden, Little Snitch
+               - **影音娱乐**: 音乐播放、视频播放、游戏、直播、播客。例: Spotify, VLC, Steam, IINA
+               - **阅读教育**: 电子书阅读、学习工具、翻译、文献管理。例: Kindle, MarginNote, Zotero, 有道词典
+               - **金融理财**: 记账、股票、银行、支付。例: 支付宝, 随手记
+
+            2. **关键判断依据**：
+               - Bundle ID 包含 "apple" 或来源为"macOS系统自带" → 系统工具
+               - 有摄像头/麦克风权限 + 来源为"第三方" → 大概率是沟通协作或影音娱乐
+               - 有辅助功能/屏幕录制权限 → 可能是系统工具或开发工具
+               - 后台常驻(background=true) → 关注其核心功能判断类别
+
+            3. **输出格式**：返回纯 JSON 数组，不要其他文字。
+            [
+              {"name": "应用显示名", "bundleID": "com.example.app", "category": "类别名"},
+              ...
+            ]
+
+            ## 应用列表
+            \(appEntries.joined(separator: ",\n"))
+            """
+
+            let payload = Data("[]".utf8)
+            do {
+                let response = try await adapter.complete(prompt: prompt, payload: payload, config: config)
+                print("[AI] Org batch \(index+1) response length: \(response.count)")
+
+                // Robust JSON extraction
+                var cleanResponse = response
+                if let fenceStart = cleanResponse.range(of: "```") {
+                    let after = cleanResponse[fenceStart.upperBound...]
+                    if let fenceEnd = after.range(of: "```") {
+                        cleanResponse = String(after[after.startIndex..<fenceEnd.lowerBound])
+                        if cleanResponse.hasPrefix("json") { cleanResponse = String(cleanResponse.dropFirst(4)) }
+                    }
+                }
+
+                guard let jsonStart = cleanResponse.firstIndex(of: "["),
+                      let jsonEnd = cleanResponse.lastIndex(of: "]"),
+                      let data = String(cleanResponse[jsonStart...jsonEnd]).data(using: .utf8) else {
+                    print("[AI] Org batch \(index+1): no JSON array found")
+                    continue
+                }
+
+                // Parse as array of objects
+                struct CategoryEntry: Codable {
+                    let name: String
+                    let bundleID: String?
+                    let category: String
+                }
+
+                do {
+                    let entries = try JSONDecoder().decode([CategoryEntry].self, from: data)
+                    for entry in entries {
+                        allCategories[entry.name] = entry.category
+                        if let bid = entry.bundleID, bid != "unknown" {
+                            // Also index by bundleID for stable lookups
+                            allCategories[bid] = entry.category
+                        }
+                    }
+                    print("[AI] Org batch \(index+1): parsed \(entries.count) entries")
+                } catch {
+                    print("[AI] Org batch \(index+1) decode error: \(error)")
+                    // Try partial salvage via JSONSerialization
+                    if let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                        for entry in arr {
+                            if let name = entry["name"] as? String,
+                               let cat = entry["category"] as? String {
+                                allCategories[name] = cat
+                            }
+                        }
+                        print("[AI] Org batch \(index+1): partial salvage \(allCategories.count)")
+                    }
+                }
+            } catch {
+                print("[AI] Org batch \(index+1) API error: \(error.localizedDescription)")
+            }
+        }
+
+        aiOrganizationProgress = "分类完成"
+        aiCategories = allCategories
+        // Build descriptions from collected categories
+        for (_, cat) in allCategories {
+            if allDescriptions[cat] == nil {
+                allDescriptions[cat] = ""
+            }
+        }
+        aiCategoryDescriptions = allDescriptions
+
+        print("[AI] Organization complete: \(allCategories.count) apps classified into \(Set(allCategories.values).count) categories")
+        if groupingMode == .byAI {
+            rebuildListSections()
         }
     }
 
@@ -297,6 +392,9 @@ final class DashboardViewModel: ObservableObject {
 
     private(set) var appStoreBytes: Int64 = 0
     private(set) var thirdPartyBytes: Int64 = 0
+    private(set) var systemCount: Int = 0
+    private(set) var appStoreCount: Int = 0
+    private(set) var thirdPartyCount: Int = 0
 
     var summaryText: String {
         let backgroundCount = apps.filter { $0.permissions.backgroundResident }.count
@@ -343,9 +441,9 @@ final class DashboardViewModel: ObservableObject {
     private func filteredApps() -> [AppRecord] {
         let key = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !key.isEmpty else { return apps }
-        // Try tag-based natural language search first
-        let tagResults = nlSearch.matchApps(query: key, tags: appTags, apps: apps)
-        if !tagResults.isEmpty { return tagResults }
+        // Try natural language / tag-based search
+        let nlResults = nlSearch.matchApps(query: searchText, tags: appTags, apps: apps)
+        if !nlResults.isEmpty { return nlResults }
         // Fallback to text match
         return apps.filter { app in
             app.name.lowercased().contains(key)
@@ -357,6 +455,9 @@ final class DashboardViewModel: ObservableObject {
     private func rebuildListSections() {
         appStoreBytes = apps.filter { $0.source == .appStore }.map(\.sizeBytes).reduce(0, +)
         thirdPartyBytes = apps.filter { $0.source == .thirdParty }.map(\.sizeBytes).reduce(0, +)
+        systemCount = apps.filter { $0.source == .system }.count
+        appStoreCount = apps.filter { $0.source == .appStore }.count
+        thirdPartyCount = apps.filter { $0.source == .thirdParty }.count
 
         let visible = filteredApps()
         switch groupingMode {
@@ -377,7 +478,11 @@ final class DashboardViewModel: ObservableObject {
             }
         case .byAI:
             let grouped = Dictionary(grouping: visible) { app in
-                aiCategories[app.name] ?? "未分类"
+                // Look up by bundleID first (stable), then by name
+                if let bid = app.bundleID, let cat = aiCategories[bid] {
+                    return cat
+                }
+                return aiCategories[app.name] ?? "未分类"
             }
             listSections = grouped.keys.sorted().map { key in
                 let desc = aiCategoryDescriptions[key]
