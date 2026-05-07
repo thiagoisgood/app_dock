@@ -4,6 +4,14 @@ enum AppSource: String, Codable, CaseIterable {
     case appStore
     case thirdParty
     case unknown
+
+    var displayLabel: String {
+        switch self {
+        case .appStore: return "App Store"
+        case .thirdParty: return "第三方"
+        case .unknown: return "未知"
+        }
+    }
 }
 
 enum SignatureTrustLevel: String, Codable {
@@ -119,6 +127,8 @@ enum ListGroupingMode: String, CaseIterable, Identifiable {
     case bySource = "来源"
     case byCategory = "类别"
     case byResidency = "后台常驻"
+    case byAI = "AI 整理"
+    case recentlyUsed = "最近常用"
 
     var id: String { rawValue }
 }
@@ -141,6 +151,11 @@ struct CapabilityStatus: Hashable, Identifiable {
     let feature: CapabilityFeature
     let available: Bool
     let reason: String
+}
+
+struct AIOrganizationResponse: Codable {
+    let appCategories: [String: String]
+    let categoryDescriptions: [String: String]
 }
 
 enum AIProviderError: Error, LocalizedError {
