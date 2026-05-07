@@ -30,12 +30,17 @@ struct DashboardView: View {
             .padding(.vertical, 10)
 
             HStack(spacing: 6) {
-                Text("App Store: \(ByteCountFormatter.string(fromByteCount: viewModel.appStoreBytes, countStyle: .file))")
+                Text("系统: \(viewModel.systemCount)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text("•")
                     .foregroundStyle(.tertiary)
-                Text("第三方: \(ByteCountFormatter.string(fromByteCount: viewModel.thirdPartyBytes, countStyle: .file))")
+                Text("App Store: \(viewModel.appStoreCount)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("•")
+                    .foregroundStyle(.tertiary)
+                Text("第三方: \(viewModel.thirdPartyCount)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -47,7 +52,7 @@ struct DashboardView: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .search)
                     .frame(width: 280)
-                Picker("分组", selection: $viewModel.groupingMode) {
+                Picker("", selection: $viewModel.groupingMode) {
                     ForEach(ListGroupingMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
@@ -200,6 +205,7 @@ private struct AppCardView: View {
 
     private var sourceColor: Color {
         switch app.source {
+        case .system: return .blue
         case .appStore: return .green
         case .thirdParty: return .orange
         case .unknown: return .gray
