@@ -129,7 +129,6 @@ enum ListGroupingMode: String, CaseIterable, Identifiable {
     case bySource = "来源"
     case byCategory = "类别"
     case byResidency = "后台常驻"
-    case byAI = "AI 整理"
     case recentlyUsed = "最近常用"
 
     var id: String { rawValue }
@@ -180,4 +179,12 @@ enum AIProviderError: Error, LocalizedError {
         case let .serverError(code): return "服务端异常 (HTTP \(code))"
         }
     }
+}
+
+/// 报告统计摘要
+struct ReportStats {
+    var totalApps: Int = 0
+    var highRisk: Int = 0
+    var unsigned: Int = 0
+    var bgResident: Int = 0
 }

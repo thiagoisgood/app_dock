@@ -9,13 +9,34 @@ struct AIProviderConfig: Hashable {
 }
 
 protocol AIProviderAdapter {
-    func complete(prompt: String, payload: Data, config: AIProviderConfig) async throws -> String
+    func complete(prompt: String, payload: Data, config: AIProviderConfig) async throws -> AICompletionResult
+}
+
+struct AICompletionResult {
+    let content: String
+    let promptTokens: Int?
+    let completionTokens: Int?
 }
 
 struct OpenAICompatibleAdapter: AIProviderAdapter {
     private let session: URLSession = .shared
 
-    func complete(prompt: String, payload: Data, config: AIProviderConfig) async throws -> String {
+    func complete(prompt: String, payload: Data, config: AIProviderConfig) async throws -> AICompletionResult {
+        return try await complete(
+            systemPrompt: PromptTemplates.securityAuditSystemPrompt(),
+            userPrompt: prompt,
+            payload: payload,
+            config: config
+        )
+    }
+
+    /// 支持自定义系统提示词的完成方法
+    func complete(
+        systemPrompt: String,
+        userPrompt: String,
+        payload: Data = Data("[]".utf8),
+        config: AIProviderConfig
+    ) async throws -> AICompletionResult {
         guard let baseURL = URL(string: config.baseURL) else {
             throw AIProviderError.invalidBaseURL
         }
@@ -29,16 +50,17 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 30
+        request.timeoutInterval = 120
 
         let userPayload = String(decoding: payload, as: UTF8.self)
+        let userContent = userPayload != "[]" ? "\(userPrompt)\n\n数据:\n\(userPayload)" : userPrompt
         let body = OpenAICompatRequest(
             model: config.model,
             temperature: config.temperature,
             max_tokens: config.maxTokens,
             messages: [
-                .init(role: "system", content: "你是 macOS 应用安全审计助手，回答要简洁可执行。"),
-                .init(role: "user", content: "\(prompt)\n\n数据:\n\(userPayload)")
+                .init(role: "system", content: systemPrompt),
+                .init(role: "user", content: userContent)
             ]
         )
         request.httpBody = try JSONEncoder().encode(body)
@@ -71,7 +93,11 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
               !content.isEmpty else {
             throw AIProviderError.decodeFailure
         }
-        return content
+        return AICompletionResult(
+            content: content,
+            promptTokens: parsed.usage?.prompt_tokens,
+            completionTokens: parsed.usage?.completion_tokens
+        )
     }
 }
 
@@ -94,7 +120,13 @@ private struct OpenAICompatResponse: Codable {
         }
         let message: Message
     }
+    struct Usage: Codable {
+        let prompt_tokens: Int?
+        let completion_tokens: Int?
+        let total_tokens: Int?
+    }
     let choices: [Choice]
+    let usage: Usage?
 }
 
 struct SemanticQueryPlanner {
@@ -127,6 +159,7 @@ struct SemanticQueryPlanner {
 struct AIProviderRouter {
     private let planner = SemanticQueryPlanner()
     private let jsonBuilder = SanitizedJsonBuilder()
+    private let tokenStore = TokenUsageStore()
 
     func execute(
         query: String,
@@ -140,8 +173,17 @@ struct AIProviderRouter {
 
         let adapter: AIProviderAdapter = OpenAICompatibleAdapter()
         do {
-            let response = try await adapter.complete(prompt: prompt, payload: payload, config: config)
-            return (structured, response)
+            let result = try await adapter.complete(prompt: prompt, payload: payload, config: config)
+            // Record token usage
+            if let pt = result.promptTokens, let ct = result.completionTokens {
+                tokenStore.recordUsage(
+                    operation: "digest",
+                    model: config.model,
+                    promptTokens: pt,
+                    completionTokens: ct
+                )
+            }
+            return (structured, result.content)
         } catch let error as AIProviderError {
             return (structured, "AI 调用失败：\(error.localizedDescription)")
         } catch {
@@ -153,6 +195,8 @@ struct AIProviderRouter {
 // MARK: - AI Tagging Service
 
 struct AITaggingService {
+    private let tokenStore = TokenUsageStore()
+
     func generateTags(for apps: [AppRecord], config: AIProviderConfig) async throws -> [String: [String]] {
         // Batch apps to avoid exceeding token limits
         let batchSize = 30
@@ -173,8 +217,19 @@ struct AITaggingService {
             """
 
             let adapter = OpenAICompatibleAdapter()
-            let response = try await adapter.complete(prompt: prompt, payload: Data("[]".utf8), config: config)
+            let result = try await adapter.complete(prompt: prompt, payload: Data("[]".utf8), config: config)
+            let response = result.content
             print("[AI] Tagging batch \(batchStart/batchSize + 1) response length: \(response.count)")
+
+            // Record token usage
+            if let pt = result.promptTokens, let ct = result.completionTokens {
+                tokenStore.recordUsage(
+                    operation: "tagging",
+                    model: config.model,
+                    promptTokens: pt,
+                    completionTokens: ct
+                )
+            }
 
             // Robust JSON extraction: strip code fences if present
             var cleanResponse = response
@@ -224,75 +279,127 @@ struct AITaggingService {
 // MARK: - Natural Language Search
 
 struct AINaturalLanguageSearch {
-    private let synonymMap: [String: [String]] = [
-        "编程": ["代码", "开发", "IDE", "编辑器", "终端", "git", "docker", "编译", "debug", "xcode", "cursor", "vscode", "code"],
-        "设计": ["UI", "UX", "绘图", "原型", "插画", "图形", "色彩", "figma", "sketch", "photoshop"],
-        "写作": ["文档", "笔记", "文本", "markdown", "文字处理", "notion", "obsidian"],
-        "办公": ["表格", "幻灯片", "演示", "日历", "邮件", "会议", "excel", "word", "powerpoint"],
-        "娱乐": ["游戏", "音乐", "视频", "播放", "流媒体", "steam", "spotify", "vlc"],
-        "沟通": ["聊天", "消息", "通话", "社交", "微信", "slack", "discord", "zoom"],
-        "安全": ["密码", "加密", "VPN", "杀毒", "防火墙"],
-        "效率": ["启动器", "快捷键", "自动化", "剪贴板", "任务管理", "alfred", "raycast"],
-        "浏览": ["浏览器", "网页", "下载", "safari", "chrome", "firefox"],
-        "媒体": ["图片", "照片", "视频编辑", "音频", "录屏"],
-        "系统": ["设置", "清理", "监控", "管理", "活动监视器", "finder"],
-    ]
+    private let mappingStore: SearchMappingStore
+
+    init(mappingStore: SearchMappingStore = SearchMappingStore()) {
+        self.mappingStore = mappingStore
+        mappingStore.ensureInitialized()
+    }
 
     func matchApps(query: String, tags: [String: [String]], apps: [AppRecord]) -> [AppRecord] {
         let queryLower = query.lowercased()
         let queryTokens = tokenize(queryLower)
         guard !queryTokens.isEmpty else { return [] }
 
-        // Expand query with synonyms
+        // Load mappings from store
+        let mappings = mappingStore.getMappings()
+
+        // Build expanded terms from mappings
         var expandedTerms = Set(queryTokens)
+        var matchedCategories = Set<String>()
+
         for token in queryTokens {
-            for (key, synonyms) in synonymMap {
-                if key.contains(token) || token.contains(key) {
-                    expandedTerms.formUnion(synonyms.map { $0.lowercased() })
-                    expandedTerms.insert(key)
+            for mapping in mappings {
+                // Check if token matches category name
+                if mapping.category.lowercased().contains(token) || token.contains(mapping.category.lowercased()) {
+                    expandedTerms.formUnion(mapping.keywords.map { $0.lowercased() })
+                    matchedCategories.insert(mapping.category)
                 }
-                for syn in synonyms {
-                    if syn.lowercased().contains(token) || token.contains(syn.lowercased()) {
-                        expandedTerms.insert(key)
-                        expandedTerms.formUnion(synonyms.map { $0.lowercased() })
+
+                // Check if token matches any keyword
+                for keyword in mapping.keywords {
+                    let kwLower = keyword.lowercased()
+                    if kwLower.contains(token) || token.contains(kwLower) {
+                        expandedTerms.formUnion(mapping.keywords.map { $0.lowercased() })
+                        matchedCategories.insert(mapping.category)
+                        expandedTerms.insert(mapping.category.lowercased())
+                    }
+                }
+
+                // Check if token matches any app name in mapping
+                for appName in mapping.appNames {
+                    if appName.lowercased().contains(token) || token.contains(appName.lowercased()) {
+                        expandedTerms.formUnion(mapping.keywords.map { $0.lowercased() })
+                        matchedCategories.insert(mapping.category)
                     }
                 }
             }
         }
 
-        print("[Search] Query: '\(query)' -> tokens: \(queryTokens) -> expanded: \(expandedTerms)")
+        print("[Search] Query: '\(query)' -> tokens: \(queryTokens) -> matched categories: \(matchedCategories)")
+        print("[Search] Expanded terms: \(expandedTerms)")
 
-        // Score each app by tag match AND name/bundleID match
-        var scored: [(app: AppRecord, score: Int)] = []
+        // Score each app by multiple factors
+        var scored: [(app: AppRecord, score: Int, reasons: [String])] = []
         for app in apps {
             var score = 0
+            var reasons: [String] = []
 
-            // Tag-based matching
+            // 1. Tag-based matching (highest weight)
             let appTags = (tags[app.name] ?? []).map { $0.lowercased() }
             for tag in appTags {
                 for term in expandedTerms {
                     if tag.contains(term) || term.contains(tag) {
-                        score += 2  // Tags get higher weight
+                        score += 3
+                        reasons.append("tag: \(tag)")
                     }
                 }
             }
 
-            // Name/bundleID matching (fallback when no tags)
-            let nameLower = app.name.lowercased()
-            let bundleLower = (app.bundleID ?? "").lowercased()
-            for term in expandedTerms {
-                if nameLower.contains(term) || bundleLower.contains(term) {
-                    score += 1
+            // 2. Mapping-based matching (app names and bundleID patterns)
+            for mapping in mappings {
+                if matchedCategories.contains(mapping.category) {
+                    // Check app name in mapping
+                    if mapping.appNames.contains(app.name) {
+                        score += 5
+                        reasons.append("mappingAppName")
+                    }
+
+                    // Check bundleID patterns
+                    if let bid = app.bundleID {
+                        for pattern in mapping.bundleIDPatterns {
+                            if bid.contains(pattern) {
+                                score += 4
+                                reasons.append("bundleID: \(pattern)")
+                            }
+                        }
+                    }
                 }
             }
 
+            // 3. Name/bundleID matching
+            let nameLower = app.name.lowercased()
+            let bundleLower = (app.bundleID ?? "").lowercased()
+            for term in expandedTerms {
+                if nameLower.contains(term) {
+                    score += 2
+                    reasons.append("name")
+                }
+                if bundleLower.contains(term) {
+                    score += 2
+                    reasons.append("bundleID")
+                }
+            }
+
+            // 4. Permission-based hints (contextual matching)
+            let permissions = app.permissions.requested
+            if matchedCategories.contains("沟通") && (permissions.contains(.camera) || permissions.contains(.microphone)) {
+                score += 1
+                reasons.append("permissionHint: 沟通")
+            }
+            if matchedCategories.contains("安全") && permissions.contains(.fullDiskAccess) {
+                score += 1
+                reasons.append("permissionHint: 安全")
+            }
+
             if score > 0 {
-                scored.append((app, score))
+                scored.append((app, score, reasons))
             }
         }
 
+        // Sort by score and return
         let results = scored.sorted { $0.score > $1.score }.map(\.app)
-        print("[Search] Found \(results.count) apps for '\(query)'")
+        print("[Search] Found \(results.count) apps for '\(query)', top scores: \(scored.prefix(5).map { "\($0.app.name): \($0.score)" })")
         return results
     }
 

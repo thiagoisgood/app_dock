@@ -22,9 +22,58 @@ struct DashboardView: View {
                     Text("构建渠道: \(viewModel.flavor == .mas ? "MAS" : "DIRECT")")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    // Token usage display
+                    if viewModel.tokenUsageSummary.totalTokens > 0 {
+                        Text("Token使用: \(viewModel.tokenUsageSummary.totalTokens) | 花费: $\(String(format: "%.4f", viewModel.tokenUsageSummary.totalCost))")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                    }
                 }
                 Spacer()
-                Button("设置") { viewModel.showSettings = true }
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await viewModel.refresh() }
+                    } label: {
+                        if viewModel.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    if !viewModel.apiKey.isEmpty {
+                        Button {
+                            Task { await viewModel.runAIOrganization() }
+                        } label: {
+                            if viewModel.isOrganizing {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "sparkles")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("重新整理应用分类")
+                        Button {
+                            Task { await viewModel.runAIReport() }
+                        } label: {
+                            if viewModel.isGeneratingReport {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label("报告", systemImage: "doc.text.magnifyingglass")
+                                    .labelStyle(.iconOnly)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("生成AI审计报告")
+                    }
+                    Button("设置") { viewModel.showSettings = true }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -61,10 +110,14 @@ struct DashboardView: View {
                 .frame(width: 320)
                 .onChange(of: viewModel.groupingMode) { _ in
                     viewModel.applySearchAndGrouping()
-                    scrollID = UUID()
                 }
                 .onChange(of: viewModel.searchText) { _ in
                     viewModel.applySearchAndGrouping()
+                }
+                .task(id: viewModel.groupingMode) {
+                    scrollID = UUID()
+                }
+                .task(id: viewModel.searchText) {
                     scrollID = UUID()
                 }
                 Spacer()
@@ -159,13 +212,16 @@ struct DashboardView: View {
             SettingsSheet(viewModel: viewModel)
         }
         .sheet(isPresented: $viewModel.showAIReport) {
-            AIReportSheet(report: viewModel.aiReport)
+            AIReportSheet(
+                report: viewModel.aiReport,
+                generatedAt: viewModel.reportGeneratedAt,
+                stats: viewModel.reportStats
+            )
         }
-        .task {
-            print("[DEBUG] DashboardView.task started, requesting focus")
-            try? await Task.sleep(for: .milliseconds(200))
-            focusedField = .search
-            print("[DEBUG] focusedField set to .search")
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                focusedField = .search
+            }
         }
     }
 
@@ -202,6 +258,7 @@ private struct AppCardView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @State private var isHovered = false
     @State private var showTagEditor = false
+    @State private var showCategoryPicker = false
 
     private var sourceColor: Color {
         switch app.source {
@@ -278,9 +335,19 @@ private struct AppCardView: View {
         }
         .contextMenu {
             Button("编辑标签...") { showTagEditor = true }
+            Divider()
+            Button("修改类别...") { showCategoryPicker = true }
         }
         .popover(isPresented: $showTagEditor) {
             TagEditorView(appName: app.name, tags: viewModel.appTags[app.name] ?? [], viewModel: viewModel)
+        }
+        .popover(isPresented: $showCategoryPicker) {
+            CategoryPickerView(
+                appName: app.name,
+                bundleID: app.bundleID,
+                currentCategory: viewModel.resolvedCategory(for: app),
+                viewModel: viewModel
+            )
         }
     }
 }
@@ -339,6 +406,56 @@ private struct TagEditorView: View {
     }
 }
 
+// MARK: - Category Picker
+
+private struct CategoryPickerView: View {
+    let appName: String
+    let bundleID: String?
+    let currentCategory: String
+    @ObservedObject var viewModel: DashboardViewModel
+    private let categories = CategorySchema.standard
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(appName)
+                .font(.headline)
+                .lineLimit(1)
+
+            Divider()
+
+            ForEach(categories, id: \.displayName) { category in
+                let isSelected = category.displayName == currentCategory
+                Button {
+                    viewModel.changeCategory(for: appName, bundleID: bundleID, to: category.displayName)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(isSelected ? .blue : .secondary)
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(category.displayName)
+                                .font(.body)
+                                .foregroundStyle(isSelected ? .blue : .primary)
+                            Text(category.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 4)
+                .background(isSelected ? Color.blue.opacity(0.08) : Color.clear)
+                .cornerRadius(6)
+            }
+        }
+        .padding(12)
+        .frame(width: 280)
+    }
+}
+
 // MARK: - Flow Layout
 
 private struct FlowLayout: Layout {
@@ -384,25 +501,47 @@ private struct FlowLayout: Layout {
 
 private struct AIReportSheet: View {
     let report: String
+    let generatedAt: Date
+    let stats: ReportStats
     @Environment(\.dismiss) private var dismiss
     @State private var contentVisible = false
 
+    private var attributedReport: Text {
+        let attr = MarkdownTextBuilder.build(from: report)
+        return Text(attr)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             HStack {
-                Text("AI 审计报告")
-                    .font(.title2.bold())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AI 审计报告")
+                        .font(.title2.bold())
+                    Text("生成时间: \(generatedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("关闭") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
             .padding()
 
+            // Stats bar
+            HStack(spacing: 12) {
+                StatBadge(label: "总应用", value: "\(stats.totalApps)", color: .blue)
+                StatBadge(label: "高风险", value: "\(stats.highRisk)", color: .red)
+                StatBadge(label: "未签名", value: "\(stats.unsigned)", color: .orange)
+                StatBadge(label: "后台常驻", value: "\(stats.bgResident)", color: .purple)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+
             Divider()
 
             ScrollView {
-                Text(report)
-                    .font(.system(.body, design: .monospaced))
+                attributedReport
                     .textSelection(.enabled)
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -410,12 +549,34 @@ private struct AIReportSheet: View {
                     .offset(y: contentVisible ? 0 : 20)
             }
         }
-        .frame(minWidth: 600, minHeight: 500)
+        .frame(minWidth: 700, minHeight: 550)
         .onAppear {
             withAnimation(.easeOut(duration: 0.5).delay(0.1)) {
                 contentVisible = true
             }
         }
+    }
+}
+
+private struct StatBadge: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.title3.bold())
+                .foregroundStyle(color)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(minWidth: 60)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(color.opacity(0.08))
+        .cornerRadius(8)
     }
 }
 
@@ -426,15 +587,113 @@ private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("OpenAI 兼容设置").font(.headline)
+
             TextField("API Key", text: $viewModel.apiKey)
                 .textFieldStyle(.roundedBorder)
             TextField("Base URL", text: $viewModel.baseURL)
                 .textFieldStyle(.roundedBorder)
             TextField("Model", text: $viewModel.model)
                 .textFieldStyle(.roundedBorder)
+
+            Divider()
+
+            // Token Usage Statistics
+            Text("Token 使用统计").font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("总Token:")
+                        .foregroundStyle(.secondary)
+                    Text("\(viewModel.tokenUsageSummary.totalTokens)")
+                        .fontWeight(.medium)
+                }
+                HStack {
+                    Text("Prompt Token:")
+                        .foregroundStyle(.secondary)
+                    Text("\(viewModel.tokenUsageSummary.totalPromptTokens)")
+                }
+                HStack {
+                    Text("Completion Token:")
+                        .foregroundStyle(.secondary)
+                    Text("\(viewModel.tokenUsageSummary.totalCompletionTokens)")
+                }
+                HStack {
+                    Text("总花费:")
+                        .foregroundStyle(.secondary)
+                    Text("$\(String(format: "%.4f", viewModel.tokenUsageSummary.totalCost))")
+                        .fontWeight(.medium)
+                        .foregroundStyle(.purple)
+                }
+                if !viewModel.tokenUsageSummary.operationCounts.isEmpty {
+                    Text("操作统计:")
+                        .foregroundStyle(.secondary)
+                    ForEach(viewModel.tokenUsageSummary.operationCounts.keys.sorted(), id: \.self) { op in
+                        Text("• \(op): \(viewModel.tokenUsageSummary.operationCounts[op] ?? 0) 次")
+                            .font(.caption)
+                    }
+                }
+                Text("最后更新: \(viewModel.tokenUsageSummary.lastUpdated.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(10)
+            .background(Color.secondary.opacity(0.1))
+            .cornerRadius(8)
+
+            Divider()
+
+            // Search Mappings
+            Text("搜索映射").font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("当前映射数量:")
+                        .foregroundStyle(.secondary)
+                    Text("\(viewModel.searchMappings.count)")
+                        .fontWeight(.medium)
+                }
+                if viewModel.isUpdatingMappings {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("正在更新...")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("更新搜索映射") {
+                        Task { await viewModel.updateSearchMappings() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                if !viewModel.searchMappings.isEmpty {
+                    Text("映射类别:")
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        ForEach(viewModel.searchMappings.sorted(by: { $0.category < $1.category }), id: \.id) { mapping in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mapping.category)
+                                    .font(.caption.bold())
+                                Text("关键词: \(mapping.keywords.prefix(5).joined(separator: ", "))...")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                    .frame(maxHeight: 120)
+                }
+            }
+            .padding(10)
+            .background(Color.secondary.opacity(0.1))
+            .cornerRadius(8)
+
             HStack {
+                Button("清除统计") {
+                    viewModel.tokenUsageStore.clearHistory()
+                    viewModel.tokenUsageSummary = viewModel.tokenUsageStore.getSummary()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 Spacer()
                 Button("保存并关闭") {
                     viewModel.saveAPISettings()
@@ -444,6 +703,6 @@ private struct SettingsSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 480)
+        .frame(width: 500, height: 600)
     }
 }
