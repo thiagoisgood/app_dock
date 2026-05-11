@@ -5,6 +5,7 @@ struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
     @FocusState private var focusedField: FocusField?
     @State private var scrollID = UUID()
+    @State private var previousSearchText = ""
 
     private enum FocusField: Hashable {
         case search
@@ -112,7 +113,16 @@ struct DashboardView: View {
                     viewModel.applySearchAndGrouping()
                 }
                 .onChange(of: viewModel.searchText) { _ in
+                    if !previousSearchText.isEmpty && viewModel.searchText.isEmpty {
+                        Task { @MainActor in
+                            viewModel.recordSearchNoClick()
+                        }
+                    }
+                    previousSearchText = viewModel.searchText
                     viewModel.applySearchAndGrouping()
+                }
+                .onAppear {
+                    previousSearchText = viewModel.searchText
                 }
                 .task(id: viewModel.groupingMode) {
                     scrollID = UUID()
@@ -124,6 +134,21 @@ struct DashboardView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 4)
+
+            // Search Learning Indicator
+            if viewModel.searchLearningStats.totalQueries > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.caption2)
+                        .foregroundStyle(.teal)
+                    Text("搜索学习: \(viewModel.searchLearningStats.totalQueries)次查询, \(Int(viewModel.searchLearningStats.clickRate))% 命中率")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 2)
+            }
 
             // AI Assistant Bar
             if viewModel.isAIProcessing {
@@ -310,6 +335,23 @@ private struct AppCardView: View {
                 }
                 .frame(maxWidth: 120)
             }
+
+            // Search match hints
+            let hints = viewModel.searchHints(for: app)
+            if !hints.isEmpty {
+                FlowLayout(spacing: 2) {
+                    ForEach(hints.prefix(2)) { hint in
+                        Text(hint.displayText)
+                            .font(.system(size: 7, weight: .semibold))
+                            .foregroundStyle(hint.color)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(hint.color.opacity(0.12))
+                            .cornerRadius(3)
+                    }
+                }
+                .frame(maxWidth: 120)
+            }
         }
         .frame(width: 120)
         .padding(.vertical, 10)
@@ -329,6 +371,10 @@ private struct AppCardView: View {
             }
         }
         .onTapGesture {
+            // Track search click if there's an active search
+            if !viewModel.searchText.isEmpty, let idx = viewModel.searchResults.firstIndex(where: { $0.app.id == app.id }) {
+                viewModel.recordSearchClick(app: app, resultIndex: idx)
+            }
             viewModel.recordAppOpen(app)
             let appURL = URL(fileURLWithPath: app.path)
             NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct AIProviderConfig: Hashable {
     var apiKey: String
@@ -280,43 +281,178 @@ struct AITaggingService {
 
 struct AINaturalLanguageSearch {
     private let mappingStore: SearchMappingStore
+    private let aliasStore: AppNameAliasStore
+    private let feedbackStore: SearchFeedbackStore?
+    private let aiCategories: [String: String]
+    private let weights: SearchWeights
 
-    init(mappingStore: SearchMappingStore = SearchMappingStore()) {
+    init(
+        mappingStore: SearchMappingStore = SearchMappingStore(),
+        aliasStore: AppNameAliasStore = AppNameAliasStore(),
+        feedbackStore: SearchFeedbackStore? = nil,
+        aiCategories: [String: String] = [:],
+        weights: SearchWeights = SearchWeights()
+    ) {
         self.mappingStore = mappingStore
+        self.aliasStore = aliasStore
+        self.feedbackStore = feedbackStore
+        self.aiCategories = aiCategories
+        self.weights = weights
         mappingStore.ensureInitialized()
     }
 
-    func matchApps(query: String, tags: [String: [String]], apps: [AppRecord]) -> [AppRecord] {
-        let queryLower = query.lowercased()
+    // MARK: - 主搜索 API：返回带提示的结果
+
+    func matchAppsWithHints(query: String, tags: [String: [String]], apps: [AppRecord]) -> [SearchResult] {
+        let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return [] }
+
+        let queryLower = key.lowercased()
+
+        // 第一层：精确名称匹配（最高优先级）
+        if let exact = tryExactNameMatch(query: key, apps: apps) {
+            return [exact]
+        }
+
         let queryTokens = tokenize(queryLower)
         guard !queryTokens.isEmpty else { return [] }
 
-        // Load mappings from store
-        let mappings = mappingStore.getMappings()
+        // 意图检测
+        let intents = IntentDetector.detectIntents(from: queryLower)
 
-        // Build expanded terms from mappings
-        var expandedTerms = Set(queryTokens)
+        // 第二层：类别直接匹配
+        let categoryResult = tryDirectCategoryMatch(tokens: queryTokens, apps: apps, intents: intents)
+        if let results = categoryResult { return results }
+
+        // 第三层：评分模式
+        return scoredMatch(tokens: queryTokens, tags: tags, apps: apps, intents: intents, query: key)
+    }
+
+    // MARK: - 精确名称匹配（第一层）
+
+    private func tryExactNameMatch(query: String, apps: [AppRecord]) -> SearchResult? {
+        let queryLower = query.lowercased()
+
+        // 1. 直接名称匹配（大小写不敏感）
+        for app in apps {
+            if app.name.lowercased() == queryLower {
+                return SearchResult(
+                    id: app.id,
+                    app: app,
+                    hints: [SearchMatchHint(id: "exact", displayText: "精确匹配", color: .green)],
+                    score: 1000
+                )
+            }
+        }
+
+        // 2. 名称别名精确匹配（如 "wechat" → "微信"）
+        let aliases = aliasStore.aliases(for: query)
+        for aliasName in aliases {
+            for app in apps {
+                if app.name.lowercased() == aliasName.lowercased() {
+                    return SearchResult(
+                        id: app.id,
+                        app: app,
+                        hints: [SearchMatchHint(id: "aliasExact", displayText: "精确匹配 (别名)", color: .green)],
+                        score: 1000
+                    )
+                }
+            }
+        }
+
+        // 3. BundleID 精确匹配
+        for app in apps {
+            if let bid = app.bundleID, bid.lowercased() == queryLower {
+                return SearchResult(
+                    id: app.id,
+                    app: app,
+                    hints: [SearchMatchHint(id: "bundleExact", displayText: "精确匹配 (BundleID)", color: .green)],
+                    score: 1000
+                )
+            }
+        }
+
+        return nil
+    }
+
+    // MARK: - 类别直接匹配
+
+    private func tryDirectCategoryMatch(tokens: [String], apps: [AppRecord], intents: [IntentFilter]) -> [SearchResult]? {
+        var matchedCategory: String? = nil
+
+        for token in tokens {
+            if let cat = SearchAliasRegistry.resolveCategoryAlias(token) {
+                matchedCategory = cat
+                break
+            }
+        }
+
+        if matchedCategory == nil {
+            let usedCategories = Set(aiCategories.values)
+            for token in tokens {
+                for cat in usedCategories {
+                    if cat.lowercased().contains(token) || token.contains(cat.lowercased()) {
+                        matchedCategory = cat
+                        break
+                    }
+                }
+                if matchedCategory != nil { break }
+            }
+        }
+
+        guard let category = matchedCategory else { return nil }
+
+        var categoryApps: [AppRecord] = []
+        for app in apps {
+            let appCat: String
+            if let bid = app.bundleID, let cat = aiCategories[bid] { appCat = cat }
+            else if let cat = aiCategories[app.name] { appCat = cat }
+            else { continue }
+            if appCat == category { categoryApps.append(app) }
+        }
+
+        guard !categoryApps.isEmpty else { return nil }
+
+        let filtered = intents.isEmpty ? categoryApps : categoryApps.filter {
+            IntentDetector.appMatchesIntents($0, intents: intents)
+        }
+
+        let hint = SearchMatchHint(id: "category:\(category)", displayText: "匹配类别: \(category)", color: .blue)
+        return filtered.map { app in
+            SearchResult(id: app.id, app: app, hints: [hint], score: 100)
+        }
+    }
+
+    // MARK: - 评分匹配
+
+    private func scoredMatch(tokens: [String], tags: [String: [String]], apps: [AppRecord], intents: [IntentFilter], query: String) -> [SearchResult] {
+        let mappings = mappingStore.getMappings()
+        var expandedTerms = Set(tokens)
         var matchedCategories = Set<String>()
 
-        for token in queryTokens {
+        for token in tokens {
+            // 类别别名
+            if let cat = SearchAliasRegistry.resolveCategoryAlias(token) {
+                matchedCategories.insert(cat)
+                if let def = CategorySchema.standard.first(where: { $0.displayName == cat }) {
+                    expandedTerms.formUnion(def.keywords.map { $0.lowercased() })
+                }
+            }
+            // Mapping 扩展
             for mapping in mappings {
-                // Check if token matches category name
-                if mapping.category.lowercased().contains(token) || token.contains(mapping.category.lowercased()) {
+                let catLower = mapping.category.lowercased()
+                if catLower.contains(token) || token.contains(catLower) {
                     expandedTerms.formUnion(mapping.keywords.map { $0.lowercased() })
                     matchedCategories.insert(mapping.category)
                 }
-
-                // Check if token matches any keyword
                 for keyword in mapping.keywords {
                     let kwLower = keyword.lowercased()
                     if kwLower.contains(token) || token.contains(kwLower) {
                         expandedTerms.formUnion(mapping.keywords.map { $0.lowercased() })
                         matchedCategories.insert(mapping.category)
-                        expandedTerms.insert(mapping.category.lowercased())
+                        expandedTerms.insert(catLower)
                     }
                 }
-
-                // Check if token matches any app name in mapping
                 for appName in mapping.appNames {
                     if appName.lowercased().contains(token) || token.contains(appName.lowercased()) {
                         expandedTerms.formUnion(mapping.keywords.map { $0.lowercased() })
@@ -324,84 +460,136 @@ struct AINaturalLanguageSearch {
                     }
                 }
             }
+            // 名称别名（AI 生成的中英文映射）
+            let nameAliases = aliasStore.aliases(for: token)
+            expandedTerms.formUnion(nameAliases.map { $0.lowercased() })
         }
 
-        print("[Search] Query: '\(query)' -> tokens: \(queryTokens) -> matched categories: \(matchedCategories)")
-        print("[Search] Expanded terms: \(expandedTerms)")
+        var scored: [(app: AppRecord, score: Double, hints: [SearchMatchHint])] = []
 
-        // Score each app by multiple factors
-        var scored: [(app: AppRecord, score: Int, reasons: [String])] = []
         for app in apps {
-            var score = 0
-            var reasons: [String] = []
-
-            // 1. Tag-based matching (highest weight)
-            let appTags = (tags[app.name] ?? []).map { $0.lowercased() }
-            for tag in appTags {
-                for term in expandedTerms {
-                    if tag.contains(term) || term.contains(tag) {
-                        score += 3
-                        reasons.append("tag: \(tag)")
-                    }
-                }
+            // 意图硬过滤
+            if !intents.isEmpty && !IntentDetector.appMatchesIntents(app, intents: intents) {
+                continue
             }
 
-            // 2. Mapping-based matching (app names and bundleID patterns)
-            for mapping in mappings {
-                if matchedCategories.contains(mapping.category) {
-                    // Check app name in mapping
-                    if mapping.appNames.contains(app.name) {
-                        score += 5
-                        reasons.append("mappingAppName")
-                    }
+            var score: Double = 0
+            var hints: [SearchMatchHint] = []
 
-                    // Check bundleID patterns
-                    if let bid = app.bundleID {
-                        for pattern in mapping.bundleIDPatterns {
-                            if bid.contains(pattern) {
-                                score += 4
-                                reasons.append("bundleID: \(pattern)")
-                            }
+            // 1. 标签匹配（最高权重）
+            let appTags = (tags[app.name] ?? [])
+            for tag in appTags {
+                let tagLower = tag.lowercased()
+                for term in expandedTerms {
+                    if tagLower.contains(term) || term.contains(tagLower) {
+                        score += weights.tagWeight
+                        let hintID = "tag:\(tag)"
+                        if !hints.contains(where: { $0.id == hintID }) {
+                            hints.append(SearchMatchHint(id: hintID, displayText: "匹配标签: \(tag)", color: .purple))
                         }
                     }
                 }
             }
 
-            // 3. Name/bundleID matching
-            let nameLower = app.name.lowercased()
-            let bundleLower = (app.bundleID ?? "").lowercased()
-            for term in expandedTerms {
-                if nameLower.contains(term) {
-                    score += 2
-                    reasons.append("name")
-                }
-                if bundleLower.contains(term) {
-                    score += 2
-                    reasons.append("bundleID")
+            // 2. 类别匹配
+            let resolvedCat: String?
+            if let bid = app.bundleID, let cat = aiCategories[bid] { resolvedCat = cat }
+            else if let cat = aiCategories[app.name] { resolvedCat = cat }
+            else { resolvedCat = nil }
+
+            if let cat = resolvedCat, matchedCategories.contains(cat) {
+                score += weights.mappingWeight
+                if !hints.contains(where: { $0.id == "category:\(cat)" }) {
+                    hints.append(SearchMatchHint(id: "category:\(cat)", displayText: "匹配类别: \(cat)", color: .blue))
                 }
             }
 
-            // 4. Permission-based hints (contextual matching)
-            let permissions = app.permissions.requested
-            if matchedCategories.contains("沟通") && (permissions.contains(.camera) || permissions.contains(.microphone)) {
-                score += 1
-                reasons.append("permissionHint: 沟通")
+            // 3. Mapping-based matching
+            for mapping in mappings where matchedCategories.contains(mapping.category) {
+                if mapping.appNames.contains(app.name) {
+                    score += weights.mappingWeight * 0.6
+                    if !hints.contains(where: { $0.id.starts(with: "mapping:") }) {
+                        hints.append(SearchMatchHint(id: "mapping:\(mapping.category)", displayText: "关键词匹配: \(mapping.category)", color: .teal))
+                    }
+                }
+                if let bid = app.bundleID {
+                    for pattern in mapping.bundleIDPatterns where bid.contains(pattern) {
+                        score += weights.bundleIDWeight * 0.5
+                        break
+                    }
+                }
             }
-            if matchedCategories.contains("安全") && permissions.contains(.fullDiskAccess) {
-                score += 1
-                reasons.append("permissionHint: 安全")
+
+            // 4. 名称/BundleID 匹配
+            let nameLower = app.name.lowercased()
+            let bundleLower = (app.bundleID ?? "").lowercased()
+            for term in tokens {
+                if nameLower.contains(term) {
+                    score += weights.nameWeight
+                    if nameLower == term {
+                        score += weights.exactNameBonus
+                    }
+                }
+                if bundleLower.contains(term) {
+                    score += weights.nameWeight * 0.5
+                }
+            }
+
+            // 5. 权限提示
+            let permissions = app.permissions.requested
+            if matchedCategories.contains("沟通协作") && (permissions.contains(.camera) || permissions.contains(.microphone)) {
+                score += weights.permissionHintWeight
+            }
+            if matchedCategories.contains("安全隐私") && permissions.contains(.fullDiskAccess) {
+                score += weights.permissionHintWeight
+            }
+
+            // 6. 反馈 boosting
+            if let feedbackStore {
+                let boost = feedbackStore.boostForApp(app.name, query: query)
+                if boost > 0 {
+                    score += boost
+                    hints.append(SearchMatchHint(id: "feedback", displayText: "学习推荐", color: .teal))
+                }
+            }
+
+            // 7. 意图提示
+            for intent in intents {
+                switch intent {
+                case .background:
+                    hints.append(SearchMatchHint(id: "intent:bg", displayText: "意图: 后台常驻", color: .orange))
+                case .heavyResource:
+                    hints.append(SearchMatchHint(id: "intent:heavy", displayText: "意图: 资源消耗大", color: .red))
+                case .unsignedHighRisk:
+                    hints.append(SearchMatchHint(id: "intent:unsigned", displayText: "意图: 未签名/高风险", color: .red))
+                case .hasPermission(let kind):
+                    hints.append(SearchMatchHint(id: "intent:perm", displayText: "意图: 含\(kind.rawValue)权限", color: .orange))
+                case .isSystem:
+                    hints.append(SearchMatchHint(id: "intent:system", displayText: "意图: 系统应用", color: .gray))
+                case .isAppStore:
+                    hints.append(SearchMatchHint(id: "intent:appstore", displayText: "意图: App Store", color: .green))
+                case .isThirdParty:
+                    hints.append(SearchMatchHint(id: "intent:third", displayText: "意图: 第三方", color: .orange))
+                }
             }
 
             if score > 0 {
-                scored.append((app, score, reasons))
+                scored.append((app, score, hints))
             }
         }
 
-        // Sort by score and return
-        let results = scored.sorted { $0.score > $1.score }.map(\.app)
-        print("[Search] Found \(results.count) apps for '\(query)', top scores: \(scored.prefix(5).map { "\($0.app.name): \($0.score)" })")
-        return results
+        return scored
+            .sorted { $0.score > $1.score }
+            .map { SearchResult(id: $0.app.id, app: $0.app, hints: $0.hints, score: Int($0.score)) }
     }
+
+    // MARK: - 向后兼容
+
+    func matchApps(query: String, tags: [String: [String]], apps: [AppRecord]) -> [AppRecord] {
+        matchAppsWithHints(query: query, tags: tags, apps: apps).map(\.app)
+    }
+
+    // MARK: - 辅助
 
     private func tokenize(_ text: String) -> [String] {
         var tokens: [String] = []
@@ -410,19 +598,13 @@ struct AINaturalLanguageSearch {
             if char.isLetter || char.isNumber {
                 current.append(char)
             } else {
-                if !current.isEmpty {
-                    tokens.append(current)
-                    current = ""
-                }
-                // CJK characters as individual tokens
+                if !current.isEmpty { tokens.append(current); current = "" }
                 if char.unicodeScalars.contains(where: { $0.value > 0x4E00 && $0.value < 0x9FFF }) {
                     tokens.append(String(char))
                 }
             }
         }
-        if !current.isEmpty {
-            tokens.append(current)
-        }
+        if !current.isEmpty { tokens.append(current) }
         return tokens
     }
 }

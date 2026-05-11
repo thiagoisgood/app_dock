@@ -42,12 +42,28 @@ final class DashboardViewModel: ObservableObject {
     private let tagStore = AppTagStore()
     private var recentUsageStore = RecentUsageStore()
     private let taggingService = AITaggingService()
-    private let nlSearch = AINaturalLanguageSearch()
+    private var nlSearch: AINaturalLanguageSearch {
+        AINaturalLanguageSearch(
+            mappingStore: searchMappingStore,
+            aliasStore: aliasStore,
+            feedbackStore: feedbackStore,
+            aiCategories: aiCategories,
+            weights: feedbackStore.weights
+        )
+    }
     private(set) var tokenUsageStore = TokenUsageStore()  // Public getter for UI
     private let searchMappingStore = SearchMappingStore()
     private let searchMappingGenerator = AISearchMappingGenerator()
     private let classificationStore = AIClassificationStore()
+    private let feedbackStore = SearchFeedbackStore()
+    private let aliasStore = AppNameAliasStore()
     private var lastGoodAIExplanation: String = ""
+
+    // 搜索反馈追踪
+    private var searchStartTime: Date?
+    private var lastSearchResults: [AppRecord] = []
+    @Published var searchResults: [SearchResult] = []
+    @Published var searchLearningStats: SearchLearningStats = SearchLearningStats()
 
     @Published var tokenUsageSummary: TokenUsageSummary = TokenUsageSummary()
     @Published var searchMappings: [SearchMapping] = []
@@ -63,6 +79,7 @@ final class DashboardViewModel: ObservableObject {
         isLoading = true
         appTags = tagStore.load()
         searchMappings = searchMappingStore.getMappings()
+        searchLearningStats = feedbackStore.stats
 
         // Load cached AI classification results
         if let cachedClassification = classificationStore.load() {
@@ -222,6 +239,17 @@ final class DashboardViewModel: ObservableObject {
         // Save classification results to cache
         classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
 
+        // 增量更新名称别名
+        aiProcessingProgress = "正在更新名称映射..."
+        do {
+            let newAliases = try await aliasStore.generateAliases(for: newApps, config: config)
+            if !newAliases.isEmpty {
+                aliasStore.updateAliases(newAliases)
+            }
+        } catch {
+            print("[AI] Failed to update name aliases: \(error.localizedDescription)")
+        }
+
         aiAssistantText = buildAIAssistantSummary()
         rebuildListSections()
     }
@@ -274,17 +302,31 @@ final class DashboardViewModel: ObservableObject {
 
         print("[AI] Classification complete: \(categories.count) apps classified, \(tags.count) apps tagged")
 
-        // 2. AI report
+        // 4. 生成应用中英文别名映射（首次配置时调用）
+        if aliasStore.getAliases().isEmpty {
+            aiProcessingProgress = "正在生成应用中英文名称映射..."
+            do {
+                let newAliases = try await aliasStore.generateAliases(for: apps, config: config)
+                if !newAliases.isEmpty {
+                    aliasStore.updateAliases(newAliases)
+                    print("[AI] Generated \(newAliases.count) name aliases")
+                }
+            } catch {
+                print("[AI] Failed to generate name aliases: \(error.localizedDescription)")
+            }
+        }
+
+        // 5. AI report
         aiProcessingProgress = "正在生成审计报告..."
         await runAIReport()
 
-        // 3. Update search mappings
+        // 6. Update search mappings
         aiProcessingProgress = "正在更新搜索映射..."
         await updateSearchMappings()
 
-        // 4. Build AI assistant summary
+        // 7. Build AI assistant summary
         aiAssistantText = buildAIAssistantSummary()
-        print("[AI] Background tasks complete. Tags: \(appTags.count) apps, Categories: \(aiCategories.count), Mappings: \(searchMappings.count)")
+        print("[AI] Background tasks complete. Tags: \(appTags.count) apps, Categories: \(aiCategories.count), Mappings: \(searchMappings.count), Aliases: \(aliasStore.getAliases().count)")
     }
 
     /// 将当前 aiCategories 转为 [String: String] 映射，供 classifierService 兼容使用
@@ -311,9 +353,10 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func applySearchAndGrouping() {
-        // 异步执行，避免在视图更新周期中直接修改状态
-        Task { @MainActor in
-            rebuildListSections()
+        // 使用 DispatchQueue.main.async 确保在下一个 run loop 周期执行
+        // 避免在视图更新周期中修改 @Published 属性
+        DispatchQueue.main.async { [weak self] in
+            self?.rebuildListSections()
         }
     }
 
@@ -635,16 +678,71 @@ final class DashboardViewModel: ObservableObject {
 
     private func filteredApps() -> [AppRecord] {
         let key = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !key.isEmpty else { return apps }
-        // Try natural language / tag-based search
-        let nlResults = nlSearch.matchApps(query: searchText, tags: appTags, apps: apps)
-        if !nlResults.isEmpty { return nlResults }
+        guard !key.isEmpty else { searchResults = []; return apps }
+
+        searchStartTime = Date()
+        let results = nlSearch.matchAppsWithHints(query: searchText, tags: appTags, apps: apps)
+        if !results.isEmpty {
+            searchResults = results
+            lastSearchResults = results.map(\.app)
+            return results.map(\.app)
+        }
+
         // Fallback to text match
-        return apps.filter { app in
+        searchResults = []
+        let textResults = apps.filter { app in
             app.name.lowercased().contains(key)
                 || (app.bundleID?.lowercased().contains(key) ?? false)
                 || app.path.lowercased().contains(key)
         }
+        lastSearchResults = textResults
+        return textResults
+    }
+
+    func searchHints(for app: AppRecord) -> [SearchMatchHint] {
+        searchResults.first(where: { $0.app.id == app.id })?.hints ?? []
+    }
+
+    func recordSearchClick(app: AppRecord, resultIndex: Int) {
+        guard let startTime = searchStartTime, !searchText.isEmpty else { return }
+        let delay = Date().timeIntervalSince(startTime)
+        let intent = IntentDetector.detectIntent(query: searchText, knownAppNames: Set(apps.map(\.name)))
+        let event = SearchFeedbackEvent(
+            query: searchText,
+            intent: intent,
+            resultCount: lastSearchResults.count,
+            clickedApp: app.name,
+            clickedIndex: resultIndex,
+            clickDelay: delay,
+            timestamp: Date(),
+            hasResults: !lastSearchResults.isEmpty
+        )
+        feedbackStore.recordEvent(event)
+        searchLearningStats = feedbackStore.stats
+        rebuildListSections()
+
+        // 强化名称别名映射
+        let aliases = aliasStore.aliases(for: searchText)
+        if !aliases.isEmpty && aliases.contains(app.name) {
+            aliasStore.reinforce(app.name, searchText, positive: true)
+        }
+    }
+
+    func recordSearchNoClick() {
+        guard !searchText.isEmpty, !lastSearchResults.isEmpty else { return }
+        let intent = IntentDetector.detectIntent(query: searchText, knownAppNames: Set(apps.map(\.name)))
+        let event = SearchFeedbackEvent(
+            query: searchText,
+            intent: intent,
+            resultCount: lastSearchResults.count,
+            clickedApp: nil,
+            clickedIndex: nil,
+            clickDelay: nil,
+            timestamp: Date(),
+            hasResults: true
+        )
+        feedbackStore.recordEvent(event)
+        searchLearningStats = feedbackStore.stats
     }
 
     private func rebuildListSections() {
