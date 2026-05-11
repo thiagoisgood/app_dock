@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum AppSource: String, Codable, CaseIterable {
     case system
@@ -187,4 +188,96 @@ struct ReportStats {
     var highRisk: Int = 0
     var unsigned: Int = 0
     var bgResident: Int = 0
+}
+
+// MARK: - 搜索相关类型
+
+enum SearchIntent: String, Codable {
+    case general, specificName, category, action, unknown
+}
+
+enum IntentFilter: Hashable {
+    case background
+    case heavyResource
+    case unsignedHighRisk
+    case hasPermission(PermissionKind)
+    case isSystem
+    case isAppStore
+    case isThirdParty
+}
+
+struct SearchFeedbackEvent: Codable, Identifiable {
+    let id: UUID
+    let query: String
+    let intent: SearchIntent
+    let resultCount: Int
+    let clickedApp: String?
+    let clickedIndex: Int?
+    let clickDelay: TimeInterval?
+    let timestamp: Date
+    let hasResults: Bool
+
+    init(id: UUID = UUID(), query: String, intent: SearchIntent, resultCount: Int, clickedApp: String?, clickedIndex: Int?, clickDelay: TimeInterval?, timestamp: Date = Date(), hasResults: Bool) {
+        self.id = id
+        self.query = query
+        self.intent = intent
+        self.resultCount = resultCount
+        self.clickedApp = clickedApp
+        self.clickedIndex = clickedIndex
+        self.clickDelay = clickDelay
+        self.timestamp = timestamp
+        self.hasResults = hasResults
+    }
+}
+
+struct SearchLearningStats: Codable {
+    var totalQueries: Int = 0
+    var totalClicks: Int = 0
+    var avgClickPosition: Double = 0.0
+    var avgClickDelay: TimeInterval = 0.0
+    var failedQueries: Int = 0
+    var lastUpdated: Date = Date()
+    var clickRate: Double {
+        guard totalQueries > 0 else { return 0 }
+        return Double(totalClicks) / Double(totalQueries) * 100
+    }
+}
+
+struct SearchWeights: Codable {
+    var tagWeight: Double = 3.0
+    var mappingWeight: Double = 5.0
+    var bundleIDWeight: Double = 4.0
+    var nameWeight: Double = 2.0
+    var permissionHintWeight: Double = 1.0
+    var exactNameBonus: Double = 10.0
+    var feedbackBoost: Double = 2.0
+
+    mutating func clamp(min: Double = 0.5, max: Double = 15.0) {
+        tagWeight = Swift.max(min, Swift.min(max, tagWeight))
+        mappingWeight = Swift.max(min, Swift.min(max, mappingWeight))
+        bundleIDWeight = Swift.max(min, Swift.min(max, bundleIDWeight))
+        nameWeight = Swift.max(min, Swift.min(max, nameWeight))
+        permissionHintWeight = Swift.max(min, Swift.min(max, permissionHintWeight))
+        exactNameBonus = Swift.max(min, Swift.min(max, exactNameBonus))
+        feedbackBoost = Swift.max(min, Swift.min(max, feedbackBoost))
+    }
+}
+
+struct SearchMatchHint: Hashable, Identifiable {
+    let id: String
+    let displayText: String
+    let color: Color
+}
+
+struct SearchResult: Identifiable, Hashable {
+    let id: UUID
+    let app: AppRecord
+    let hints: [SearchMatchHint]
+    let score: Int
+}
+
+struct ScoredApp {
+    let app: AppRecord
+    var score: Double
+    var reasons: [String]
 }
