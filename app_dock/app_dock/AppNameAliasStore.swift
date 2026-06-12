@@ -18,6 +18,27 @@ struct AppNameAlias: Codable {
 final class AppNameAliasStore {
     private let fileURL: URL
     private var aliases: [AppNameAlias] = []
+    private static let builtInAliases: [AppNameAlias] = [
+        AppNameAlias(chineseName: "微信", englishName: "WeChat", bundleID: "com.tencent.xinWeChat", confidence: 1.0),
+        AppNameAlias(chineseName: "企业微信", englishName: "WeCom", bundleID: "com.tencent.WeWorkMac", confidence: 1.0),
+        AppNameAlias(chineseName: "腾讯会议", englishName: "Tencent Meeting", bundleID: "com.tencent.meeting", confidence: 1.0),
+        AppNameAlias(chineseName: "飞书", englishName: "Feishu", bundleID: "com.electron.lark", confidence: 0.95),
+        AppNameAlias(chineseName: "飞书", englishName: "Lark", bundleID: "com.electron.lark", confidence: 0.95),
+        AppNameAlias(chineseName: "钉钉", englishName: "DingTalk", bundleID: "com.alibaba.DingTalkMac", confidence: 0.95),
+        AppNameAlias(chineseName: "网易云音乐", englishName: "NeteaseMusic", bundleID: "com.netease.163music", confidence: 0.95),
+        AppNameAlias(chineseName: "百度网盘", englishName: "BaiduNetdisk", bundleID: "com.baidu.netdisk", confidence: 0.95),
+        AppNameAlias(chineseName: "夸克网盘", englishName: "Quark Cloud Drive", bundleID: "com.quark.desktop", confidence: 0.9),
+        AppNameAlias(chineseName: "有道词典", englishName: "Youdao Dict", bundleID: "com.youdao.YoudaoDict", confidence: 0.9),
+        AppNameAlias(chineseName: "剪映", englishName: "CapCut", bundleID: "com.lemon.lvpro", confidence: 0.95),
+        AppNameAlias(chineseName: "抖音", englishName: "TikTok", bundleID: "com.ss.iphone.ugc.AwemeMac", confidence: 0.85),
+        AppNameAlias(chineseName: "小红书", englishName: "RedNote", bundleID: "com.xingin.discover", confidence: 0.9),
+        AppNameAlias(chineseName: "哔哩哔哩", englishName: "Bilibili", bundleID: "tv.danmaku.bili", confidence: 0.95),
+        AppNameAlias(chineseName: "京东", englishName: "JD", bundleID: "com.jd.JDMobileMac", confidence: 0.85),
+        AppNameAlias(chineseName: "淘宝", englishName: "Taobao", bundleID: "com.taobao.taobao4mac", confidence: 0.85),
+        AppNameAlias(chineseName: "支付宝", englishName: "Alipay", bundleID: "com.alipay.mac", confidence: 0.9),
+        AppNameAlias(chineseName: "高德地图", englishName: "Amap", bundleID: "com.autonavi.amap", confidence: 0.9),
+        AppNameAlias(chineseName: "百度地图", englishName: "Baidu Maps", bundleID: "com.baidu.map", confidence: 0.85)
+    ]
 
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -44,30 +65,53 @@ final class AppNameAliasStore {
         }
     }
 
-    func getAliases() -> [AppNameAlias] { aliases }
+    func getAliases() -> [AppNameAlias] { mergedAliases() }
 
     /// 查询名称对应的别名名称列表（用于搜索扩展）
     func aliases(for name: String) -> [String] {
-        let lower = name.lowercased()
-        var results: [String] = []
-        for alias in aliases {
-            if alias.chineseName.lowercased() == lower || alias.englishName.lowercased() == lower {
-                results.append(alias.chineseName)
-                results.append(alias.englishName)
-                if alias.englishName.lowercased() != lower {
-                    results.append(alias.englishName)
-                }
-                if alias.chineseName.lowercased() != lower {
-                    results.append(alias.chineseName)
-                }
+        matchingAliases(for: name).flatMap { [$0.chineseName, $0.englishName] }
+            .deduplicated()
+            .filter { normalized($0) != normalized(name) }
+    }
+
+    /// 查询命中的完整别名记录，供搜索按 BundleID 反向匹配。
+    func matchingAliases(for name: String) -> [AppNameAlias] {
+        let lower = normalized(name)
+        var matchedAliases: [AppNameAlias] = []
+        for alias in mergedAliases() {
+            let chinese = normalized(alias.chineseName)
+            let english = normalized(alias.englishName)
+            if chinese == lower || english == lower {
+                matchedAliases.append(alias)
             }
             // 也匹配 bundleID
-            if let bid = alias.bundleID, lower.contains(bid.lowercased()) || bid.lowercased().contains(lower) {
+            if let bid = alias.bundleID {
+                let bundle = normalized(bid)
+                if lower.contains(bundle) || bundle.contains(lower) {
+                    matchedAliases.append(alias)
+                }
+            }
+        }
+        return matchedAliases.deduplicated { "\($0.chineseName)|\($0.englishName)|\($0.bundleID ?? "")" }
+    }
+
+    /// 查询某个应用自身可展开出的中英文别名。
+    func aliases(forAppName name: String, bundleID: String?) -> [String] {
+        let appName = normalized(name)
+        let appBundle = bundleID.map { normalized($0) }
+        var results: [String] = []
+        for alias in mergedAliases() {
+            let chinese = normalized(alias.chineseName)
+            let english = normalized(alias.englishName)
+            let bundle = alias.bundleID.map { normalized($0) }
+            let nameMatched = chinese == appName || english == appName
+            let bundleMatched = appBundle != nil && bundle != nil && appBundle == bundle
+            if nameMatched || bundleMatched {
                 results.append(alias.chineseName)
                 results.append(alias.englishName)
             }
         }
-        return Array(Set(results)).filter { $0.lowercased() != lower }
+        return results.deduplicated().filter { normalized($0) != appName }
     }
 
     /// 强化或弱化某对映射的置信度
@@ -124,6 +168,19 @@ final class AppNameAliasStore {
         save()
     }
 
+    private func mergedAliases() -> [AppNameAlias] {
+        (Self.builtInAliases + aliases).deduplicated { "\($0.chineseName)|\($0.englishName)|\($0.bundleID ?? "")" }
+    }
+
+    private func normalized(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: ".", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - AI 生成
 
     func generateAliases(for apps: [AppRecord], config: AIProviderConfig) async throws -> [AppNameAlias] {
@@ -176,5 +233,25 @@ final class AppNameAliasStore {
 
         print("[NameAlias] Generated \(parsed.count) name aliases from AI")
         return parsed
+    }
+}
+
+private extension Array {
+    func deduplicated<Key: Hashable>(by key: (Element) -> Key) -> [Element] {
+        var seen = Set<Key>()
+        var result: [Element] = []
+        for element in self {
+            let value = key(element)
+            if seen.insert(value).inserted {
+                result.append(element)
+            }
+        }
+        return result
+    }
+}
+
+private extension Array where Element: Hashable {
+    func deduplicated() -> [Element] {
+        deduplicated { $0 }
     }
 }

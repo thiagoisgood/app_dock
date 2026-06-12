@@ -135,6 +135,29 @@ enum ListGroupingMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum AppScopeFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case highRisk = "高风险"
+    case thirdParty = "第三方"
+    case sensitivePermissions = "敏感权限"
+    case background = "后台常驻"
+    case unsigned = "签名异常"
+    case updates = "可更新"
+
+    var id: String { rawValue }
+}
+
+enum AppSortOrder: String, CaseIterable, Identifiable {
+    case risk = "风险优先"
+    case cpu = "CPU"
+    case memory = "内存"
+    case size = "体积"
+    case name = "名称"
+    case source = "来源"
+
+    var id: String { rawValue }
+}
+
 struct AppListSection: Identifiable, Hashable {
     var id: String { title }
     let title: String
@@ -197,6 +220,7 @@ enum SearchIntent: String, Codable {
 }
 
 enum IntentFilter: Hashable {
+    case risky
     case background
     case heavyResource
     case unsignedHighRisk
@@ -276,8 +300,58 @@ struct SearchResult: Identifiable, Hashable {
     let score: Int
 }
 
-struct ScoredApp {
-    let app: AppRecord
-    var score: Double
-    var reasons: [String]
+extension PermissionKind {
+    var displayLabel: String {
+        switch self {
+        case .camera: return "摄像头"
+        case .microphone: return "麦克风"
+        case .location: return "定位"
+        case .fullDiskAccess: return "完全磁盘访问"
+        case .accessibility: return "辅助功能"
+        case .screenRecording: return "屏幕录制"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .camera: return "camera"
+        case .microphone: return "mic"
+        case .location: return "location"
+        case .fullDiskAccess: return "externaldrive.badge.shield.check"
+        case .accessibility: return "figure.wave"
+        case .screenRecording: return "rectangle.on.rectangle"
+        }
+    }
+}
+
+extension PermissionGrantState {
+    var displayLabel: String {
+        switch self {
+        case .notDetermined: return "未请求"
+        case .authorized: return "已授权"
+        case .denied: return "已拒绝"
+        case .restricted: return "受限"
+        case .unavailable: return "不可读取"
+        }
+    }
+}
+
+extension SignatureTrustLevel {
+    var displayLabel: String {
+        switch self {
+        case .trusted: return "可信签名"
+        case .signedUnknown: return "签名未知"
+        case .unsignedHighRisk: return "未签名"
+        }
+    }
+}
+
+extension AuditRiskLevel {
+    var displayLabel: String {
+        switch self {
+        case .low: return "低"
+        case .medium: return "中"
+        case .high: return "高"
+        }
+    }
 }

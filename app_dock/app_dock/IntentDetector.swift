@@ -15,7 +15,10 @@ struct IntentDetector {
         if tokensContainsAny(tokens, of: ["占用大", "资源消耗", "heavy", "cpu高", "内存大", "吃资源", "资源占用", "卡顿", "slow", "占用大的", "高cpu", "高内存"]) {
             intents.append(.heavyResource)
         }
-        if tokensContainsAny(tokens, of: ["未签名", "unsigned", "风险", "高风险", "不安全", "risk", "trust", "未签名的"]) {
+        if tokensContainsAny(tokens, of: ["风险", "高风险", "不安全", "可疑", "异常", "risk", "risky", "danger", "suspicious"]) {
+            intents.append(.risky)
+        }
+        if tokensContainsAny(tokens, of: ["未签名", "unsigned", "签名异常", "签名未知", "unknown signer", "trust", "未签名的"]) {
             intents.append(.unsignedHighRisk)
         }
         if tokensContainsAny(tokens, of: ["摄像头", "camera", "摄像", "相机", "拍摄", "录像", "拍照"]) {
@@ -52,6 +55,9 @@ struct IntentDetector {
 
         for intent in intents {
             switch intent {
+            case .risky:
+                let signals = PermissionHeuristicsEngine().evaluate(app: app)
+                if signals.isEmpty && app.signature.trustLevel == .trusted { return false }
             case .background:
                 if !app.permissions.backgroundResident { return false }
             case .heavyResource:

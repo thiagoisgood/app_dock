@@ -95,7 +95,7 @@ final class SearchMappingStore {
     func getDefaultMappings() -> [SearchMapping] {
         return [
             SearchMapping(
-                category: "编程",
+                category: "开发工具",
                 keywords: ["代码", "开发", "IDE", "编辑器", "终端", "git", "docker", "编译", "debug", "xcode", "cursor", "vscode", "code", "程序", "框架", "库", "API"],
                 appNames: [],
                 bundleIDPatterns: ["com.apple.dt.Xcode", "com.microsoft.VSCode", "com.jetbrains", "com.github", "com.docker"],
@@ -103,7 +103,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "设计",
+                category: "设计创作",
                 keywords: ["UI", "UX", "绘图", "原型", "插画", "图形", "色彩", "figma", "sketch", "photoshop", "设计", "创意", "排版", "字体", "矢量"],
                 appNames: [],
                 bundleIDPatterns: ["com.figma", "com.bohemiancoding.sketch", "com.adobe.photoshop"],
@@ -111,7 +111,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "写作",
+                category: "办公效率",
                 keywords: ["文档", "笔记", "文本", "markdown", "文字处理", "notion", "obsidian", "写作", "编辑", "博客", "文章", "日记"],
                 appNames: [],
                 bundleIDPatterns: ["com.notion.id", "md.obsidian", "com.apple.iWork.Pages"],
@@ -119,7 +119,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "办公",
+                category: "办公效率",
                 keywords: ["表格", "幻灯片", "演示", "日历", "邮件", "会议", "excel", "word", "powerpoint", "办公", "效率", "项目管理", "任务"],
                 appNames: [],
                 bundleIDPatterns: ["com.microsoft.Office", "com.apple.iWork", "com.apple.Mail"],
@@ -127,7 +127,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "娱乐",
+                category: "影音娱乐",
                 keywords: ["游戏", "音乐", "视频", "播放", "流媒体", "steam", "spotify", "vlc", "娱乐", "休闲", "影视", "直播"],
                 appNames: [],
                 bundleIDPatterns: ["com.valvesoftware.steam", "com.spotify.client", "org.videolan.vlc"],
@@ -135,7 +135,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "沟通",
+                category: "沟通协作",
                 keywords: ["聊天", "消息", "通话", "社交", "微信", "slack", "discord", "zoom", "沟通", "协作", "团队", "会议"],
                 appNames: [],
                 bundleIDPatterns: ["com.tencent.xinWeChat", "com.slack", "com.hnc.Discord", "us.zoom.xos"],
@@ -143,7 +143,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "安全",
+                category: "安全隐私",
                 keywords: ["密码", "加密", "VPN", "杀毒", "防火墙", "安全", "隐私", "保护", "认证", "双重验证"],
                 appNames: [],
                 bundleIDPatterns: ["com.agilebits.onepassword", "com.bitwarden", "com.apple.firewall"],
@@ -151,7 +151,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "效率",
+                category: "办公效率",
                 keywords: ["启动器", "快捷键", "自动化", "剪贴板", "任务管理", "alfred", "raycast", "效率", "快捷", "workflow", "自动化"],
                 appNames: [],
                 bundleIDPatterns: ["com.runningwithcrayons.Alfred", "com.raycast.macos"],
@@ -159,7 +159,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "浏览",
+                category: "网络浏览",
                 keywords: ["浏览器", "网页", "下载", "safari", "chrome", "firefox", "上网", "搜索", "网络"],
                 appNames: [],
                 bundleIDPatterns: ["com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox"],
@@ -167,7 +167,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "媒体",
+                category: "影音娱乐",
                 keywords: ["图片", "照片", "视频编辑", "音频", "录屏", "媒体", "素材", "剪辑", "渲染"],
                 appNames: [],
                 bundleIDPatterns: ["com.apple.FinalCut", "com.apple.photos", "com.blackmagic-design.DaVinciResolve"],
@@ -175,7 +175,7 @@ final class SearchMappingStore {
                 confidence: 0.5
             ),
             SearchMapping(
-                category: "系统",
+                category: "系统工具",
                 keywords: ["设置", "清理", "监控", "管理", "活动监视器", "finder", "系统", "工具", "优化", "维护", "卸载"],
                 appNames: [],
                 bundleIDPatterns: ["com.apple.finder", "com.apple.ActivityMonitor", "com.macpaw.CleanMyMac"],
@@ -237,6 +237,10 @@ struct AISearchMappingGenerator {
            - 英文名/缩写（如"IDE", "VPN"）
            - 具体应用名（如"微信", "Slack"）
         4. 提取BundleID模式用于精确匹配
+
+        ## 类别约束
+        category 必须从以下标准类别中选择，不要自创新类别：
+        开发工具、设计创作、办公效率、沟通协作、系统工具、网络浏览、安全隐私、影音娱乐、阅读教育、金融理财、其他
 
         ## 输出格式（纯JSON数组）
         [
