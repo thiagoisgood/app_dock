@@ -7,6 +7,9 @@ final class DashboardViewModel: ObservableObject {
     @Published var apps: [AppRecord] = []
     @Published var searchText: String = ""
     @Published var groupingMode: ListGroupingMode = .bySource
+    @Published var scopeFilter: AppScopeFilter = .all
+    @Published var sortOrder: AppSortOrder = .name
+    @Published var selectedAppID: AppRecord.ID?
     @Published var listSections: [AppListSection] = []
     @Published var findings: [AppRiskFinding] = []
     @Published var aiDigest: String = ""
@@ -31,6 +34,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var aiAssistantText: String = ""
     @Published var isAIProcessing = false
     @Published var aiProcessingProgress: String = ""
+    @Published var isSearchLoading = false
 
     private let pipeline = AuditPipeline()
     private let aiRouter = AIProviderRouter()
@@ -48,6 +52,7 @@ final class DashboardViewModel: ObservableObject {
             aliasStore: aliasStore,
             feedbackStore: feedbackStore,
             aiCategories: aiCategories,
+            recentUsageRecords: recentUsageStore.load(),
             weights: feedbackStore.weights
         )
     }
@@ -57,11 +62,18 @@ final class DashboardViewModel: ObservableObject {
     private let classificationStore = AIClassificationStore()
     private let feedbackStore = SearchFeedbackStore()
     private let aliasStore = AppNameAliasStore()
+    private var appInstallMonitor: AppInstallMonitor?
     private var lastGoodAIExplanation: String = ""
 
     // 搜索反馈追踪
     private var searchStartTime: Date?
     private var lastSearchResults: [AppRecord] = []
+    private var allSearchResults: [SearchResult] = []
+    private var searchDebounceTask: Task<Void, Never>?
+    private var searchCache: [String: [SearchResult]] = [:]
+    private var searchCacheOrder: [String] = []
+    private var searchIndexVersion = 0
+    private let searchCacheLimit = 24
     @Published var searchResults: [SearchResult] = []
     @Published var searchLearningStats: SearchLearningStats = SearchLearningStats()
 
@@ -90,6 +102,7 @@ final class DashboardViewModel: ObservableObject {
         // 1. Load cache for instant display
         if let cached = cacheStore.load(), !cached.isEmpty {
             apps = cached
+            invalidateSearchCache()
             capabilityStatuses = CapabilityFeature.allCases.map { CapabilityPolicy.current.status(for: $0) }
             findings = buildRiskFindings(for: apps)
             rebuildListSections()
@@ -99,6 +112,7 @@ final class DashboardViewModel: ObservableObject {
         // 2. Full scan in background
         let output = await pipeline.run()
         apps = output.0
+        invalidateSearchCache()
         capabilityStatuses = output.1
         findings = buildRiskFindings(for: apps)
         rebuildListSections()
@@ -131,6 +145,7 @@ final class DashboardViewModel: ObservableObject {
 
         // 5. Load token usage summary
         tokenUsageSummary = tokenUsageStore.getSummary()
+        startAppInstallMonitor()
     }
 
     func updateSearchMappings() async {
@@ -150,6 +165,7 @@ final class DashboardViewModel: ObservableObject {
             let newMappings = try await searchMappingGenerator.generateMappings(for: apps, config: config)
             searchMappingStore.updateMappings(newMappings: newMappings)
             searchMappings = searchMappingStore.getMappings()
+            invalidateSearchCache()
             tokenUsageSummary = tokenUsageStore.getSummary()
             print("[ViewModel] Updated search mappings: \(newMappings.count) categories")
         } catch {
@@ -182,6 +198,7 @@ final class DashboardViewModel: ObservableObject {
 
         // Update main list
         apps = newApps
+        invalidateSearchCache()
         capabilityStatuses = output.1
         findings = buildRiskFindings(for: apps)
         rebuildListSections()
@@ -196,6 +213,23 @@ final class DashboardViewModel: ObservableObject {
 
         // Refresh token usage summary
         tokenUsageSummary = tokenUsageStore.getSummary()
+    }
+
+    private func startAppInstallMonitor() {
+        guard appInstallMonitor == nil else { return }
+        let monitor = AppInstallMonitor { [weak self] in
+            Task { @MainActor in
+                await self?.handleApplicationDirectoryChanged()
+            }
+        }
+        monitor.start()
+        appInstallMonitor = monitor
+    }
+
+    private func handleApplicationDirectoryChanged() async {
+        guard !isLoading else { return }
+        aiAssistantText = "检测到应用目录变化，正在自动刷新..."
+        await refresh()
     }
 
     private func processNewlyInstalledApps(_ newApps: [AppRecord]) async {
@@ -235,6 +269,7 @@ final class DashboardViewModel: ObservableObject {
         // 更新标签
         appTags = tagStore.merging(tags, into: appTags)
         tagStore.save(appTags)
+        invalidateSearchCache()
 
         // Save classification results to cache
         classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
@@ -294,6 +329,7 @@ final class DashboardViewModel: ObservableObject {
         // 更新标签
         appTags = tagStore.merging(tags, into: appTags)
         tagStore.save(appTags)
+        invalidateSearchCache()
 
         // 保存分类结果到持久化存储
         classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
@@ -353,10 +389,40 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func applySearchAndGrouping() {
+        searchDebounceTask?.cancel()
+        isSearchLoading = false
         // 使用 DispatchQueue.main.async 确保在下一个 run loop 周期执行
         // 避免在视图更新周期中修改 @Published 属性
         DispatchQueue.main.async { [weak self] in
             self?.rebuildListSections()
+        }
+    }
+
+    func scheduleSearchAndGrouping() {
+        searchDebounceTask?.cancel()
+
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            isSearchLoading = false
+            applySearchAndGrouping()
+            return
+        }
+
+        if searchCache[searchCacheKey(for: query)] != nil {
+            isSearchLoading = false
+            applySearchAndGrouping()
+            return
+        }
+
+        isSearchLoading = true
+        searchDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.rebuildListSections()
+                self.isSearchLoading = false
+            }
         }
     }
 
@@ -406,6 +472,7 @@ final class DashboardViewModel: ObservableObject {
                 aiCategories[bid] = result.category
             }
         }
+        invalidateSearchCache()
         // 填充类别描述
         for (_, cat) in aiCategories {
             if aiCategoryDescriptions[cat] == nil {
@@ -619,6 +686,54 @@ final class DashboardViewModel: ObservableObject {
     private(set) var appStoreCount: Int = 0
     private(set) var thirdPartyCount: Int = 0
 
+    var displayedApps: [AppRecord] {
+        listSections.flatMap(\.apps)
+    }
+
+    var selectedApp: AppRecord? {
+        if let selectedAppID, let app = apps.first(where: { $0.id == selectedAppID }) {
+            return app
+        }
+        return displayedApps.first
+    }
+
+    var highRiskCount: Int {
+        apps.filter { riskLevel(for: $0) == .high }.count
+    }
+
+    var mediumRiskCount: Int {
+        apps.filter { riskLevel(for: $0) == .medium }.count
+    }
+
+    var unsignedCount: Int {
+        apps.filter { $0.signature.trustLevel == .unsignedHighRisk }.count
+    }
+
+    var backgroundCount: Int {
+        apps.filter(\.permissions.backgroundResident).count
+    }
+
+    var sensitivePermissionAppCount: Int {
+        let sensitive: Set<PermissionKind> = [.camera, .microphone, .screenRecording, .fullDiskAccess, .accessibility]
+        return apps.filter { !$0.permissions.requested.intersection(sensitive).isEmpty }.count
+    }
+
+    var healthScore: Int {
+        guard !apps.isEmpty else { return 100 }
+        let penalty = highRiskCount * 10
+            + mediumRiskCount * 4
+            + unsignedCount * 5
+            + backgroundCount
+            + sensitivePermissionAppCount * 2
+        return max(0, min(100, 100 - penalty))
+    }
+
+    var healthSummary: String {
+        if healthScore >= 85 { return "整体健康，保持定期复查" }
+        if healthScore >= 65 { return "有少量项目需要关注" }
+        return "建议优先处理高风险应用"
+    }
+
     var summaryText: String {
         let backgroundCount = apps.filter { $0.permissions.backgroundResident }.count
         return "总计 \(apps.count) 个应用，后台常驻 \(backgroundCount) 个。"
@@ -632,12 +747,14 @@ final class DashboardViewModel: ObservableObject {
             tags.append(trimmed)
             appTags[appName] = tags
             tagStore.save(appTags)
+            invalidateSearchCache()
         }
     }
 
     func removeTag(from appName: String, tag: String) {
         appTags[appName]?.removeAll { $0 == tag }
         tagStore.save(appTags)
+        invalidateSearchCache()
     }
 
     func resolvedCategory(for app: AppRecord) -> String {
@@ -652,11 +769,44 @@ final class DashboardViewModel: ObservableObject {
             aiCategories[bid] = category
         }
         classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
+        invalidateSearchCache()
         rebuildListSections()
     }
 
     func recordAppOpen(_ app: AppRecord) {
         recentUsageStore.recordOpen(appName: app.name)
+        invalidateSearchCache()
+    }
+
+    func selectApp(_ app: AppRecord) {
+        selectedAppID = app.id
+    }
+
+    func riskSignals(for app: AppRecord) -> [RiskSignal] {
+        riskEngine.evaluate(app: app)
+    }
+
+    func riskLevel(for app: AppRecord) -> AuditRiskLevel? {
+        riskSignals(for: app).max(by: { rank($0.level) < rank($1.level) })?.level
+    }
+
+    func riskScore(for app: AppRecord) -> Int {
+        let signalScore = riskSignals(for: app).reduce(0) { partial, signal in
+            partial + (signal.level == .high ? 30 : signal.level == .medium ? 15 : 6)
+        }
+        let signatureScore: Int
+        switch app.signature.trustLevel {
+        case .trusted: signatureScore = 0
+        case .signedUnknown: signatureScore = 12
+        case .unsignedHighRisk: signatureScore = 25
+        }
+        let permissionScore = min(24, app.permissions.requested.count * 4)
+        let runtimeScore = app.metrics.cpuPercent > 45 ? 12 : (app.metrics.memoryMB > 1024 ? 6 : 0)
+        return min(100, signalScore + signatureScore + permissionScore + runtimeScore)
+    }
+
+    func hasUpdateSuggestion(for app: AppRecord) -> Bool {
+        updateSuggestions.contains { $0.appName == app.name && $0.status == "可更新" }
     }
 
     private func buildRiskFindings(for apps: [AppRecord]) -> [AppRiskFinding] {
@@ -678,25 +828,71 @@ final class DashboardViewModel: ObservableObject {
 
     private func filteredApps() -> [AppRecord] {
         let key = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !key.isEmpty else { searchResults = []; return apps }
+        guard !key.isEmpty else {
+            allSearchResults = []
+            searchResults = []
+            lastSearchResults = []
+            return apps
+        }
 
         searchStartTime = Date()
+        let cacheKey = searchCacheKey(for: key)
+        if let cached = searchCache[cacheKey] {
+            allSearchResults = cached
+            return cached.map(\.app)
+        }
+
         let results = nlSearch.matchAppsWithHints(query: searchText, tags: appTags, apps: apps)
         if !results.isEmpty {
-            searchResults = results
-            lastSearchResults = results.map(\.app)
+            allSearchResults = results
+            storeSearchCache(results, for: cacheKey)
             return results.map(\.app)
         }
 
         // Fallback to text match
-        searchResults = []
         let textResults = apps.filter { app in
             app.name.lowercased().contains(key)
                 || (app.bundleID?.lowercased().contains(key) ?? false)
                 || app.path.lowercased().contains(key)
         }
-        lastSearchResults = textResults
+        allSearchResults = textResults.map {
+            SearchResult(
+                id: $0.id,
+                app: $0,
+                hints: [SearchMatchHint(id: "fallbackText", displayText: "文本命中", color: .gray)],
+                score: 1
+            )
+        }
+        storeSearchCache(allSearchResults, for: cacheKey)
         return textResults
+    }
+
+    private func searchCacheKey(for query: String) -> String {
+        "\(searchIndexVersion)|\(normalizedSearchKey(query))"
+    }
+
+    private func normalizedSearchKey(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func storeSearchCache(_ results: [SearchResult], for key: String) {
+        guard !key.isEmpty else { return }
+        if searchCache[key] == nil {
+            searchCacheOrder.append(key)
+        }
+        searchCache[key] = results
+        while searchCacheOrder.count > searchCacheLimit {
+            let evicted = searchCacheOrder.removeFirst()
+            searchCache.removeValue(forKey: evicted)
+        }
+    }
+
+    private func invalidateSearchCache() {
+        searchIndexVersion += 1
+        searchCache.removeAll()
+        searchCacheOrder.removeAll()
     }
 
     func searchHints(for app: AppRecord) -> [SearchMatchHint] {
@@ -729,7 +925,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func recordSearchNoClick() {
-        guard !searchText.isEmpty, !lastSearchResults.isEmpty else { return }
+        guard !searchText.isEmpty else { return }
         let intent = IntentDetector.detectIntent(query: searchText, knownAppNames: Set(apps.map(\.name)))
         let event = SearchFeedbackEvent(
             query: searchText,
@@ -739,7 +935,7 @@ final class DashboardViewModel: ObservableObject {
             clickedIndex: nil,
             clickDelay: nil,
             timestamp: Date(),
-            hasResults: true
+            hasResults: !lastSearchResults.isEmpty
         )
         feedbackStore.recordEvent(event)
         searchLearningStats = feedbackStore.stats
@@ -752,12 +948,22 @@ final class DashboardViewModel: ObservableObject {
         appStoreCount = apps.filter { $0.source == .appStore }.count
         thirdPartyCount = apps.filter { $0.source == .thirdParty }.count
 
-        let visible = filteredApps()
+        let searched = filteredApps()
+        let scoped = applyScope(to: searched)
+        let visible = isSearchActive ? scoped : sortApps(scoped)
+
+        if isSearchActive {
+            syncVisibleSearchResults(visible)
+            listSections = [AppListSection(title: "搜索结果", apps: visible)]
+            syncSelection()
+            return
+        }
+
         switch groupingMode {
         case .bySource:
             let grouped = Dictionary(grouping: visible) { $0.source.rawValue }
             listSections = grouped.keys.sorted().map { key in
-                AppListSection(title: key, apps: grouped[key, default: []].sorted(by: { $0.name < $1.name }))
+                AppListSection(title: key, apps: grouped[key, default: []])
             }
         case .byCategory:
             let grouped = Dictionary(grouping: visible) { app in
@@ -775,12 +981,12 @@ final class DashboardViewModel: ObservableObject {
                 // 尝试从 AI 描述或 Schema 获取类别描述
                 let desc = aiCategoryDescriptions[key] ?? CategorySchema.description(for: key)
                 let title = desc.isEmpty ? key : "\(key) — \(desc)"
-                return AppListSection(title: title, apps: grouped[key, default: []].sorted(by: { $0.name < $1.name }))
+                return AppListSection(title: title, apps: grouped[key, default: []])
             }
         case .byResidency:
             let grouped = Dictionary(grouping: visible) { $0.permissions.backgroundResident ? "后台常驻" : "前台/按需运行" }
             listSections = grouped.keys.sorted().map { key in
-                AppListSection(title: key, apps: grouped[key, default: []].sorted(by: { $0.name < $1.name }))
+                AppListSection(title: key, apps: grouped[key, default: []])
             }
         case .recentlyUsed:
             let recent = recentUsageStore.recentApps(limit: 30)
@@ -791,6 +997,110 @@ final class DashboardViewModel: ObservableObject {
                 listSections = [AppListSection(title: "最近常用", apps: recentApps)]
             }
         }
+        syncSelection()
+    }
+
+    private func applyScope(to apps: [AppRecord]) -> [AppRecord] {
+        applyScope(scopeFilter, to: apps)
+    }
+
+    private func applyScope(_ filter: AppScopeFilter, to apps: [AppRecord]) -> [AppRecord] {
+        switch filter {
+        case .all:
+            return apps
+        case .highRisk:
+            return apps.filter { riskLevel(for: $0) == .high }
+        case .thirdParty:
+            return apps.filter { $0.source == .thirdParty }
+        case .sensitivePermissions:
+            let sensitive: Set<PermissionKind> = [.camera, .microphone, .screenRecording, .fullDiskAccess, .accessibility]
+            return apps.filter { !$0.permissions.requested.intersection(sensitive).isEmpty }
+        case .background:
+            return apps.filter(\.permissions.backgroundResident)
+        case .unsigned:
+            return apps.filter { $0.signature.trustLevel != .trusted }
+        case .updates:
+            return apps.filter { hasUpdateSuggestion(for: $0) }
+        }
+    }
+
+    private var isSearchActive: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var hasActiveSearch: Bool {
+        isSearchActive
+    }
+
+    private func syncVisibleSearchResults(_ visible: [AppRecord]) {
+        let visibleIDs = Set(visible.map(\.id))
+        let orderedVisibleIDs = Dictionary(uniqueKeysWithValues: visible.enumerated().map { ($0.element.id, $0.offset) })
+        let scopedResults = allSearchResults
+            .filter { visibleIDs.contains($0.app.id) }
+            .sorted {
+                (orderedVisibleIDs[$0.app.id] ?? Int.max) < (orderedVisibleIDs[$1.app.id] ?? Int.max)
+            }
+
+        searchResults = scopedResults
+        lastSearchResults = scopedResults.map(\.app)
+    }
+
+    func count(for filter: AppScopeFilter) -> Int {
+        if isSearchActive {
+            let base = allSearchResults.map(\.app)
+            return applyScope(filter, to: base).count
+        }
+
+        switch filter {
+        case .all: return apps.count
+        case .highRisk: return highRiskCount
+        case .thirdParty: return thirdPartyCount
+        case .sensitivePermissions: return sensitivePermissionAppCount
+        case .background: return backgroundCount
+        case .unsigned: return unsignedCount
+        case .updates: return updateSuggestions.filter { $0.status == "可更新" }.count
+        }
+    }
+
+    private func sortApps(_ apps: [AppRecord]) -> [AppRecord] {
+        switch sortOrder {
+        case .risk:
+            return apps.sorted {
+                let lhs = riskScore(for: $0)
+                let rhs = riskScore(for: $1)
+                return lhs == rhs ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : lhs > rhs
+            }
+        case .cpu:
+            return apps.sorted {
+                $0.metrics.cpuPercent == $1.metrics.cpuPercent ? $0.name < $1.name : $0.metrics.cpuPercent > $1.metrics.cpuPercent
+            }
+        case .memory:
+            return apps.sorted {
+                $0.metrics.memoryMB == $1.metrics.memoryMB ? $0.name < $1.name : $0.metrics.memoryMB > $1.metrics.memoryMB
+            }
+        case .size:
+            return apps.sorted {
+                $0.sizeBytes == $1.sizeBytes ? $0.name < $1.name : $0.sizeBytes > $1.sizeBytes
+            }
+        case .name:
+            return apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .source:
+            return apps.sorted {
+                $0.source.rawValue == $1.source.rawValue ? $0.name < $1.name : $0.source.rawValue < $1.source.rawValue
+            }
+        }
+    }
+
+    private func syncSelection() {
+        let visible = displayedApps
+        guard !visible.isEmpty else {
+            selectedAppID = nil
+            return
+        }
+        if let selectedAppID, visible.contains(where: { $0.id == selectedAppID }) {
+            return
+        }
+        selectedAppID = visible.first?.id
     }
 
     private func rank(_ level: AuditRiskLevel) -> Int {

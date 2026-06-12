@@ -115,7 +115,7 @@ final class SearchFeedbackStore {
         var s = SearchLearningStats()
         s.totalQueries = events.count
         s.totalClicks = events.filter { $0.clickedApp != nil }.count
-        s.failedQueries = events.filter { $0.hasResults && $0.clickedApp == nil }.count
+        s.failedQueries = events.filter { !$0.hasResults || $0.clickedApp == nil }.count
 
         let clicked = events.compactMap(\.clickedIndex)
         if !clicked.isEmpty {
