@@ -35,10 +35,14 @@ final class DashboardViewModel: ObservableObject {
     @Published var isAIProcessing = false
     @Published var aiProcessingProgress: String = ""
     @Published var isSearchLoading = false
+    @Published var isUninstallingAppID: AppRecord.ID?
+    @Published var uninstallResult: UninstallCleanupResult?
+    @Published var showUninstallResult = false
 
     private let pipeline = AuditPipeline()
     private let aiRouter = AIProviderRouter()
     private let updateService = UpdateAdvisorService()
+    private let uninstallService = UninstallService()
     private let riskEngine = PermissionHeuristicsEngine()
     private let categoryClassifier = AppCategoryClassifier()
     private let classifierService = AppClassifierService()
@@ -807,6 +811,29 @@ final class DashboardViewModel: ObservableObject {
 
     func hasUpdateSuggestion(for app: AppRecord) -> Bool {
         updateSuggestions.contains { $0.appName == app.name && $0.status == "可更新" }
+    }
+
+    func uninstallPreview(for app: AppRecord) -> UninstallPreview {
+        uninstallService.preview(app: app)
+    }
+
+    func uninstallAndClean(_ app: AppRecord) async {
+        guard isUninstallingAppID == nil else { return }
+        isUninstallingAppID = app.id
+        defer { isUninstallingAppID = nil }
+
+        let result = await uninstallService.uninstallAndClean(app: app)
+        uninstallResult = result
+        showUninstallResult = true
+
+        if result.removedPaths.contains(app.path) {
+            apps.removeAll { $0.id == app.id }
+            updateSuggestions.removeAll { $0.appName == app.name }
+            findings = buildRiskFindings(for: apps)
+            invalidateSearchCache()
+            rebuildListSections()
+            cacheStore.save(apps)
+        }
     }
 
     private func buildRiskFindings(for apps: [AppRecord]) -> [AppRiskFinding] {

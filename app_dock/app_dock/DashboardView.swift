@@ -7,32 +7,32 @@ struct DashboardView: View {
     @State private var previousSearchText = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            AuditToolbar(viewModel: viewModel)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-
-            Divider()
-
-            HStack(spacing: 0) {
-                AuditSidebar(viewModel: viewModel)
-                    .frame(width: 230)
-
-                Divider()
-
-                AuditListPane(
-                    viewModel: viewModel,
-                    previousSearchText: $previousSearchText
-                )
-                .frame(minWidth: 620)
-
-                Divider()
-
-                AppInspectorPane(viewModel: viewModel)
-                    .frame(width: 360)
-            }
+        NavigationSplitView {
+            AuditSidebar(viewModel: viewModel)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+        } content: {
+            AuditListPane(viewModel: viewModel)
+                .navigationSplitViewColumnWidth(min: 600, ideal: 720, max: 980)
+        } detail: {
+            AppInspectorPane(viewModel: viewModel)
+                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 480)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle("AppDock Audit")
+        .searchable(
+            text: $viewModel.searchText,
+            placement: .toolbar,
+            prompt: "搜索应用名、标签、Bundle ID 或自然语言"
+        )
+        .onChange(of: viewModel.searchText) { _ in
+            handleSearchTextChanged()
+        }
+        .onAppear {
+            previousSearchText = viewModel.searchText
+        }
+        .toolbar {
+            AuditToolbar(viewModel: viewModel)
+        }
+        .background(.background)
         .sheet(isPresented: $viewModel.showSettings) {
             SettingsSheet(viewModel: viewModel)
         }
@@ -43,25 +43,34 @@ struct DashboardView: View {
                 stats: viewModel.reportStats
             )
         }
+        .alert("卸载清理结果", isPresented: $viewModel.showUninstallResult, presenting: viewModel.uninstallResult) { _ in
+            Button("好") {}
+        } message: { result in
+            Text(result.alertMessage)
+        }
+    }
+
+    private func handleSearchTextChanged() {
+        if !previousSearchText.isEmpty && viewModel.searchText.isEmpty {
+            Task { @MainActor in viewModel.recordSearchNoClick() }
+        }
+        previousSearchText = viewModel.searchText
+        viewModel.scheduleSearchAndGrouping()
     }
 }
 
 // MARK: - Toolbar
 
-private struct AuditToolbar: View {
+private struct AuditToolbar: ToolbarContent {
     @ObservedObject var viewModel: DashboardViewModel
 
-    var body: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("AppDock Audit")
-                    .font(.title2.weight(.semibold))
-                Text(viewModel.isLoading ? "正在扫描 macOS 应用..." : viewModel.healthSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
+    var body: some ToolbarContent {
+        ToolbarItemGroup {
+            Label(viewModel.isLoading ? "正在扫描 macOS 应用..." : viewModel.healthSummary, systemImage: viewModel.isLoading ? "arrow.triangle.2.circlepath" : "checkmark.shield")
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help(viewModel.healthSummary)
 
             CapabilityPill(flavor: viewModel.flavor)
 
@@ -69,11 +78,11 @@ private struct AuditToolbar: View {
                 Label("\(viewModel.tokenUsageSummary.totalTokens) tokens · $\(String(format: "%.4f", viewModel.tokenUsageSummary.totalCost))", systemImage: "chart.bar.doc.horizontal")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(.quaternary.opacity(0.6), in: Capsule())
+                    .help("AI Token 用量")
             }
+        }
 
+        ToolbarItemGroup {
             Button {
                 Task { await viewModel.refresh() }
             } label: {
@@ -86,6 +95,7 @@ private struct AuditToolbar: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .help("重新扫描应用")
 
             if !viewModel.apiKey.isEmpty {
                 Button {
@@ -100,6 +110,7 @@ private struct AuditToolbar: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .help("使用 AI 重新整理应用分类")
 
                 Button {
                     Task { await viewModel.runAIReport() }
@@ -113,6 +124,7 @@ private struct AuditToolbar: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .help("生成 AI 审计报告")
             }
 
             Button {
@@ -122,6 +134,7 @@ private struct AuditToolbar: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .help("打开设置")
         }
     }
 }
@@ -145,13 +158,8 @@ private struct AuditSidebar: View {
     @ObservedObject var viewModel: DashboardViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("审计范围")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-
+        List {
+            Section("审计范围") {
                 ForEach(AppScopeFilter.allCases) { filter in
                     ScopeRow(
                         filter: filter,
@@ -164,14 +172,7 @@ private struct AuditSidebar: View {
                 }
             }
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("分组")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-
+            Section("分组") {
                 Picker("", selection: $viewModel.groupingMode) {
                     ForEach(ListGroupingMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
@@ -185,14 +186,7 @@ private struct AuditSidebar: View {
                 }
             }
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("能力状态")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-
+            Section("能力状态") {
                 ForEach(viewModel.capabilityStatuses) { status in
                     HStack(spacing: 8) {
                         Image(systemName: status.available ? "checkmark.circle.fill" : "minus.circle.fill")
@@ -206,10 +200,8 @@ private struct AuditSidebar: View {
                 }
             }
 
-            Spacer()
-
             if viewModel.searchLearningStats.totalQueries > 0 {
-                VStack(alignment: .leading, spacing: 5) {
+                Section {
                     Label("搜索学习", systemImage: "brain.head.profile")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.teal)
@@ -217,12 +209,10 @@ private struct AuditSidebar: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                .padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
         }
-        .padding(14)
-        .background(.bar)
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 
     private func count(for filter: AppScopeFilter) -> Int {
@@ -241,22 +231,21 @@ private struct ScopeRow: View {
             HStack(spacing: 8) {
                 Image(systemName: filter.systemImage)
                     .frame(width: 17)
-                    .foregroundStyle(selected ? .white : filter.tint)
+                    .foregroundStyle(selected ? Color.accentColor : filter.tint)
                 Text(filter.rawValue)
                     .font(.callout)
-                    .foregroundStyle(selected ? .white : .primary)
+                    .foregroundStyle(.primary)
                 Spacer()
                 Text("\(count)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(selected ? .white.opacity(0.9) : .secondary)
+                    .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(selected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .padding(.vertical, 2)
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.accentColor.opacity(0.16) : Color.clear)
     }
 }
 
@@ -264,49 +253,11 @@ private struct ScopeRow: View {
 
 private struct AuditListPane: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @Binding var previousSearchText: String
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 12) {
                 HealthSummaryStrip(viewModel: viewModel)
-
-                HStack(spacing: 10) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundStyle(.secondary)
-                        TextField("搜索应用名、标签、Bundle ID 或输入自然语言查询", text: $viewModel.searchText)
-                            .textFieldStyle(.plain)
-                            .focused($searchFocused)
-                            .onChange(of: viewModel.searchText) { _ in
-                                if !previousSearchText.isEmpty && viewModel.searchText.isEmpty {
-                                    Task { @MainActor in viewModel.recordSearchNoClick() }
-                                }
-                                previousSearchText = viewModel.searchText
-                                viewModel.scheduleSearchAndGrouping()
-                            }
-                            .onAppear {
-                                previousSearchText = viewModel.searchText
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                    searchFocused = true
-                                }
-                            }
-                        Group {
-                            if viewModel.isSearchLoading {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Color.clear
-                            }
-                        }
-                        .frame(width: 14, height: 14)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-
-                }
 
                 if viewModel.isAIProcessing {
                     StatusBanner(systemImage: "sparkles", text: viewModel.aiProcessingProgress, active: true)
@@ -320,6 +271,7 @@ private struct AuditListPane: View {
                 }
             }
             .padding(16)
+            .background(.bar)
 
             AuditTableHeader()
 
@@ -356,7 +308,7 @@ private struct AuditListPane: View {
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 6)
-                            .background(.bar)
+                            .background(.regularMaterial)
                         }
                     }
                 }
@@ -364,6 +316,7 @@ private struct AuditListPane: View {
             }
             .scrollContentBackground(.hidden)
         }
+        .background(.background)
     }
 }
 
@@ -371,7 +324,19 @@ private struct HealthSummaryStrip: View {
     @ObservedObject var viewModel: DashboardViewModel
 
     var body: some View {
-        HStack(spacing: 10) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                metricTiles
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
+                metricTiles
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var metricTiles: some View {
             MetricTile(
                 title: "健康分",
                 value: "\(viewModel.healthScore)",
@@ -383,7 +348,6 @@ private struct HealthSummaryStrip: View {
             MetricTile(title: "签名异常", value: "\(viewModel.unsignedCount)", subtitle: "未知或未签名", color: .orange, systemImage: "signature")
             MetricTile(title: "敏感权限", value: "\(viewModel.sensitivePermissionAppCount)", subtitle: "高敏访问", color: .teal, systemImage: "hand.raised.fill")
             MetricTile(title: "后台常驻", value: "\(viewModel.backgroundCount)", subtitle: "资源与隐私", color: .purple, systemImage: "clock.arrow.circlepath")
-        }
     }
 }
 
@@ -418,7 +382,7 @@ private struct MetricTile: View {
         }
         .padding(10)
         .frame(minWidth: 112, maxWidth: .infinity, minHeight: 74)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .modernPanel()
     }
 }
 
@@ -449,7 +413,7 @@ private struct StatusBanner: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .modernPanel(material: .thinMaterial)
     }
 }
 
@@ -605,6 +569,10 @@ private struct RiskBadge: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 4)
         .background((level ?? .low).tint.opacity(0.10), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke((level ?? .low).tint.opacity(0.20), lineWidth: 0.5)
+        }
     }
 }
 
@@ -666,11 +634,10 @@ private struct AppInspectorPane: View {
                         }
 
                         UpdateSuggestionPanel(app: app, suggestions: viewModel.updateSuggestions)
-                        ResidualPreviewPanel(app: app)
+                        ResidualPreviewPanel(app: app, viewModel: viewModel)
                     }
                     .padding(16)
                 }
-                .background(Color(nsColor: .controlBackgroundColor))
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "app.dashed")
@@ -685,6 +652,7 @@ private struct AppInspectorPane: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(.background)
     }
 }
 
@@ -719,6 +687,7 @@ private struct ActionBar: View {
     @ObservedObject var viewModel: DashboardViewModel
     @State private var showTagEditor = false
     @State private var showCategoryPicker = false
+    @State private var showUninstallConfirmation = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -739,9 +708,32 @@ private struct ActionBar: View {
             } label: {
                 Label("整理", systemImage: "tag")
             }
+            Button(role: .destructive) {
+                showUninstallConfirmation = true
+            } label: {
+                if viewModel.isUninstallingAppID == app.id {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Label("卸载", systemImage: "trash")
+                }
+            }
+            .disabled(viewModel.isUninstallingAppID != nil)
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+        .confirmationDialog(
+            "确认卸载并清理 \(app.name)？",
+            isPresented: $showUninstallConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("移入废纸篓并清理残留", role: .destructive) {
+                Task { await viewModel.uninstallAndClean(app) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(uninstallConfirmationMessage(for: app, viewModel: viewModel))
+        }
         .popover(isPresented: $showTagEditor) {
             TagEditorView(appName: app.name, tags: viewModel.appTags[app.name] ?? [], viewModel: viewModel)
         }
@@ -768,7 +760,7 @@ private struct InspectorSection<Content: View>: View {
             content
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .modernPanel()
     }
 }
 
@@ -917,28 +909,75 @@ private struct UpdateSuggestionPanel: View {
 
 private struct ResidualPreviewPanel: View {
     let app: AppRecord
-    @State private var candidates: [String] = []
+    @ObservedObject var viewModel: DashboardViewModel
+    @State private var preview: UninstallPreview?
+    @State private var showUninstallConfirmation = false
 
     var body: some View {
-        InspectorSection(title: "卸载残留预览", systemImage: "trash") {
-            VStack(alignment: .leading, spacing: 8) {
-                if candidates.isEmpty {
-                    Text("未发现常见残留路径。")
+        let items = preview?.items ?? []
+        InspectorSection(title: "一键卸载清理", systemImage: "trash") {
+            VStack(alignment: .leading, spacing: 10) {
+                if let reason = preview?.unavailableReason {
+                    Label(reason, systemImage: "lock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if items.isEmpty {
+                    Text("未发现可清理项目。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(candidates, id: \.self) { path in
-                        Text(path)
-                            .font(.caption)
-                            .foregroundStyle(path.hasPrefix("unavailable") ? .secondary : .primary)
-                            .textSelection(.enabled)
-                            .lineLimit(2)
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(items) { item in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(item.kind.rawValue)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(item.kind == .appBundle ? Color.red : Color.secondary, in: Capsule())
+                                    .frame(width: 68, alignment: .leading)
+                                Text(item.path)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                                    .lineLimit(2)
+                            }
+                        }
                     }
+
+                    Button(role: .destructive) {
+                        showUninstallConfirmation = true
+                    } label: {
+                        if viewModel.isUninstallingAppID == app.id {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("一键卸载并清理", systemImage: "trash")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(viewModel.isUninstallingAppID != nil)
                 }
             }
         }
         .task(id: app.id) {
-            candidates = UninstallService().preview(app: app).candidates
+            preview = viewModel.uninstallPreview(for: app)
+        }
+        .onChange(of: viewModel.uninstallResult?.id) { _ in
+            preview = viewModel.uninstallPreview(for: app)
+        }
+        .confirmationDialog(
+            "确认卸载并清理 \(app.name)？",
+            isPresented: $showUninstallConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("移入废纸篓并清理残留", role: .destructive) {
+                Task { await viewModel.uninstallAndClean(app) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(uninstallConfirmationMessage(for: app, viewModel: viewModel))
         }
     }
 }
@@ -1384,9 +1423,45 @@ private struct SettingsMetric: View {
 
 // MARK: - Helpers
 
+private extension View {
+    func modernPanel(cornerRadius: CGFloat = 8, material: Material = .regularMaterial) -> some View {
+        background(material, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(.quaternary, lineWidth: 0.5)
+            }
+    }
+}
+
 private func openApp(_ app: AppRecord) {
     let appURL = URL(fileURLWithPath: app.path)
     NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+}
+
+private func uninstallConfirmationMessage(for app: AppRecord, viewModel: DashboardViewModel) -> String {
+    let preview = viewModel.uninstallPreview(for: app)
+    if let reason = preview.unavailableReason {
+        return reason
+    }
+    let count = preview.items.count
+    if count == 0 {
+        return "未发现可清理项目。"
+    }
+    return "将把应用本体和 \(max(0, count - 1)) 个常见残留项目移入废纸篓，可从废纸篓恢复。"
+}
+
+private extension UninstallCleanupResult {
+    var alertMessage: String {
+        var lines = [summary]
+        if !removedItems.isEmpty {
+            lines.append("已处理: \(removedItems.map { $0.kind.rawValue }.joined(separator: "、"))")
+        }
+        if !failedItems.isEmpty {
+            let failures = failedItems.prefix(3).map { "\($0.path): \($0.reason)" }.joined(separator: "\n")
+            lines.append("失败项目:\n\(failures)")
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 private extension AppScopeFilter {

@@ -10,7 +10,17 @@ struct CapabilityPolicy {
     let featureAvailability: [CapabilityFeature: Bool]
 
     static var current: CapabilityPolicy {
-#if APP_FLAVOR_MAS
+#if APP_FLAVOR_DIRECT
+        return CapabilityPolicy(
+            flavor: .direct,
+            featureAvailability: [
+                .tccRead: true,
+                .signatureDeepAudit: true,
+                .uninstallDelete: true,
+                .updateProbe: true
+            ]
+        )
+#elseif APP_FLAVOR_MAS
         return CapabilityPolicy(
             flavor: .mas,
             featureAvailability: [
@@ -21,6 +31,7 @@ struct CapabilityPolicy {
             ]
         )
 #else
+        // Default local builds are full-capability direct builds.
         return CapabilityPolicy(
             flavor: .direct,
             featureAvailability: [

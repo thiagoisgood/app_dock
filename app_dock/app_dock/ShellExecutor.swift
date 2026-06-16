@@ -1,6 +1,10 @@
 import Foundation
 
-struct ShellExecutor {
+protocol ShellExecuting {
+    func run(_ launchPath: String, _ arguments: [String]) async -> String
+}
+
+struct ShellExecutor: ShellExecuting {
     func run(_ launchPath: String, _ arguments: [String]) async -> String {
         await withCheckedContinuation { continuation in
             let process = Process()

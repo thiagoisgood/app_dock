@@ -5,7 +5,7 @@ struct AppDockAuditEngineApp: App {
     @StateObject private var viewModel = DashboardViewModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("AppDock Audit") {
             DashboardView(viewModel: viewModel)
                 .task {
                     await viewModel.bootstrap()
@@ -14,6 +14,5 @@ struct AppDockAuditEngineApp: App {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
         }
-        .windowStyle(.hiddenTitleBar)
     }
 }
