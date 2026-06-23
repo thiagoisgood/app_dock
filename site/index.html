@@ -6,7 +6,7 @@
     <title>App Dock - AI-Native macOS App Audit</title>
     <meta
       name="description"
-      content="App Dock 是一款 AI-native macOS 应用审计工具，用于扫描应用来源、签名、权限、运行资源，并用语义搜索辅助整理和清理。"
+      content="App Dock 是一款 AI-native macOS 应用审计工具，公开预览版已完成 Developer ID 签名、公证和 stapling，可从 GitHub Release 下载。"
     >
     <meta name="theme-color" content="#f7f4eb">
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
@@ -38,8 +38,22 @@
             把 Mac 上的应用清单、来源、签名、权限、后台占用和更新线索整理成一张可查询的审计桌面。
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="downloads/App-Dock-1.0.dmg">下载开发者预览版</a>
+            <a class="button primary" href="https://github.com/thiagoisgood/app_dock/releases" data-release-download>下载公开预览版</a>
             <a class="button secondary" href="#architecture">查看系统结构</a>
+          </div>
+          <div class="release-panel" aria-live="polite">
+            <div>
+              <span>Downloads</span>
+              <strong data-release-count>读取中</strong>
+            </div>
+            <div>
+              <span>Version</span>
+              <strong data-release-version>GitHub Release</strong>
+            </div>
+            <div>
+              <span>Status</span>
+              <strong data-release-status>公开预览版</strong>
+            </div>
           </div>
           <dl class="hero-facts" aria-label="项目事实">
             <div>
@@ -219,12 +233,32 @@
           <p class="eyebrow">Developer Preview</p>
           <h2>下载 App Dock 1.0 预览版</h2>
           <p>
-            当前包适合本机验证和内部试用。若要公开分发，仍需要 Developer ID 签名、公证和 stapling 流程。
+            公开预览版已经完成 Developer ID 签名、公证和 stapling。若 GitHub Release 已发布，页面会读取 Release asset 的真实下载次数；否则先使用站点 downloads 目录中的 DMG。
           </p>
         </div>
-        <div class="download-actions reveal">
-          <a class="button primary" href="downloads/App-Dock-1.0.dmg">下载 DMG</a>
-          <a class="button secondary" href="https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution">分发说明</a>
+        <div class="download-panel reveal">
+          <div class="release-ledger" aria-live="polite">
+            <div>
+              <span>文件</span>
+              <strong data-release-filename>正在读取 GitHub Release</strong>
+            </div>
+            <div>
+              <span>大小</span>
+              <strong data-release-size>--</strong>
+            </div>
+            <div>
+              <span>发布日期</span>
+              <strong data-release-date>--</strong>
+            </div>
+            <div>
+              <span>下载次数</span>
+              <strong data-release-count>读取中</strong>
+            </div>
+          </div>
+          <div class="download-actions">
+            <a class="button primary" href="https://github.com/thiagoisgood/app_dock/releases" data-release-download>下载 DMG</a>
+            <a class="button secondary" href="https://github.com/thiagoisgood/app_dock/releases" data-release-link>GitHub Releases</a>
+          </div>
         </div>
       </section>
     </main>
