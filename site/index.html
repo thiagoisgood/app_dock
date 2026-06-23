@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>App Dock - AI-Native macOS App Audit</title>
+    <meta
+      name="description"
+      content="App Dock 是一款 AI-native macOS 应用审计工具，用于扫描应用来源、签名、权限、运行资源，并用语义搜索辅助整理和清理。"
+    >
+    <meta name="theme-color" content="#f7f4eb">
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <script>
+      document.documentElement.classList.add("js");
+    </script>
+  </head>
+  <body>
+    <header class="site-header" aria-label="主导航">
+      <a class="wordmark" href="#top" aria-label="App Dock 首页">
+        <span class="wordmark-mark">AD</span>
+        <span>App Dock</span>
+      </a>
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="#manual">审计手册</a>
+        <a href="#screens">界面</a>
+        <a href="#architecture">架构</a>
+        <a href="#download">下载</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero section-grid">
+        <div class="hero-copy reveal">
+          <p class="eyebrow">AI-Native macOS Audit Engine</p>
+          <h1>App Dock</h1>
+          <p class="lede">
+            把 Mac 上的应用清单、来源、签名、权限、后台占用和更新线索整理成一张可查询的审计桌面。
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="downloads/App-Dock-1.0.dmg">下载开发者预览版</a>
+            <a class="button secondary" href="#architecture">查看系统结构</a>
+          </div>
+          <dl class="hero-facts" aria-label="项目事实">
+            <div>
+              <dt>Platform</dt>
+              <dd>macOS 13+</dd>
+            </div>
+            <div>
+              <dt>Runtime</dt>
+              <dd>SwiftUI</dd>
+            </div>
+            <div>
+              <dt>Mode</dt>
+              <dd>DIRECT / MAS</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="hero-plate reveal" aria-label="App Dock 应用界面截图">
+          <div class="plate-label">
+            <span>SCREEN 01</span>
+            <span>Audit dashboard</span>
+          </div>
+          <img src="assets/app-dock-dashboard.png" alt="App Dock 审计仪表盘，显示应用列表、风险指标、权限矩阵和一键卸载清理区域">
+        </div>
+      </section>
+
+      <section class="index-strip" aria-label="示例扫描指标">
+        <div>
+          <span class="metric-number">152</span>
+          <span class="metric-label">应用样本</span>
+        </div>
+        <div>
+          <span class="metric-number danger">36</span>
+          <span class="metric-label">高风险项</span>
+        </div>
+        <div>
+          <span class="metric-number accent">64</span>
+          <span class="metric-label">敏感权限</span>
+        </div>
+        <div>
+          <span class="metric-number">54</span>
+          <span class="metric-label">后台常驻</span>
+        </div>
+      </section>
+
+      <section id="manual" class="manual-section section-grid">
+        <div class="section-kicker reveal">01 / Audit Manual</div>
+        <div class="section-heading reveal">
+          <h2>从应用束到可行动证据。</h2>
+          <p>
+            App Dock 的主流程不是单纯列应用，而是把系统扫描结果压成可排序、可解释、可继续操作的证据链。
+          </p>
+        </div>
+        <div class="diagram-panel reveal">
+          <img src="assets/audit-loop.svg" alt="App Dock 审计流程图：扫描、证据、信号、行动四个阶段循环">
+        </div>
+        <div class="chapter-grid reveal">
+          <article>
+            <span class="chapter-number">A</span>
+            <h3>扫描</h3>
+            <p>读取常见 Applications 路径，识别系统、App Store 和第三方应用。</p>
+          </article>
+          <article>
+            <span class="chapter-number">B</span>
+            <h3>归因</h3>
+            <p>合并签名、TCC 状态、Info.plist 权限声明、CPU 和内存占用。</p>
+          </article>
+          <article>
+            <span class="chapter-number">C</span>
+            <h3>处置</h3>
+            <p>输出风险解释、更新建议、语义检索结果和卸载清理候选项。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="screens" class="screens-section">
+        <div class="section-grid">
+          <div class="section-kicker reveal">02 / Product Surface</div>
+          <div class="section-heading reveal">
+            <h2>一个界面里完成审计、定位和清理。</h2>
+            <p>
+              左侧是审计范围和分组，中心是应用资产表，右侧展开单个应用的身份、签名、权限矩阵和资源证据。
+            </p>
+          </div>
+        </div>
+        <figure class="screenshot-board reveal">
+          <img src="assets/app-dock-dashboard.png" alt="App Dock 主界面截图">
+          <figcaption>
+            <span>Plate 02</span>
+            <strong>风险优先的应用资产视图</strong>
+            <em>截图中的示例扫描展示了高风险、第三方、敏感权限、后台常驻和可更新等审计入口。</em>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="feature-section section-grid">
+        <div class="section-kicker reveal">03 / Feature Plates</div>
+        <div class="feature-grid">
+          <article class="feature-card reveal">
+            <div class="mini-diagram source-diagram" aria-hidden="true">
+              <span>/Applications</span>
+              <i></i>
+              <span>Bundle</span>
+              <i></i>
+              <span>Record</span>
+            </div>
+            <h3>来源与签名审计</h3>
+            <p>区分系统、App Store、第三方来源，调用 codesign 提取 Team ID、签名主体和信任等级。</p>
+          </article>
+          <article class="feature-card reveal">
+            <div class="mini-diagram matrix-diagram" aria-hidden="true">
+              <span></span><span></span><span></span>
+              <span></span><span></span><span></span>
+              <span></span><span></span><span></span>
+            </div>
+            <h3>权限矩阵与风险信号</h3>
+            <p>读取 Info.plist 与 TCC 状态，并标记未签名、后台常驻加高敏权限、异常资源占用等信号。</p>
+          </article>
+          <article class="feature-card reveal">
+            <div class="mini-diagram query-diagram" aria-hidden="true">
+              <b>自然语言</b>
+              <span>标签</span>
+              <span>类别</span>
+              <span>反馈</span>
+            </div>
+            <h3>本地相关性搜索</h3>
+            <p>语义查询先在本地做意图、标签、别名和反馈排序，再把必要摘要交给兼容 OpenAI 的模型。</p>
+          </article>
+          <article class="feature-card reveal">
+            <div class="mini-diagram cleanup-diagram" aria-hidden="true">
+              <span>Preview</span>
+              <span>Trash</span>
+              <span>Refresh</span>
+            </div>
+            <h3>卸载残留清理</h3>
+            <p>先预览应用本体和 Library 残留，再以废纸篓语义执行清理；DIRECT 构建可处理受保护路径。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="architecture" class="architecture-section">
+        <div class="section-grid">
+          <div class="section-kicker reveal">04 / Build Notes</div>
+          <div class="section-heading reveal">
+            <h2>为真实 Mac 环境做的能力分级。</h2>
+            <p>
+              同一套代码可以构建为完整 DIRECT 版本，或构建为受限 MAS 版本，把敏感能力关进明确的策略表。
+            </p>
+          </div>
+          <div class="spec-table reveal" role="table" aria-label="App Dock 技术说明">
+            <div role="row">
+              <span role="cell">Entry</span>
+              <strong role="cell">AppDockAuditEngineApp.swift -> DashboardViewModel</strong>
+            </div>
+            <div role="row">
+              <span role="cell">Pipeline</span>
+              <strong role="cell">Scan -> source -> signature -> TCC -> permissions -> metrics</strong>
+            </div>
+            <div role="row">
+              <span role="cell">AI Route</span>
+              <strong role="cell">Sanitized JSON -> OpenAI-compatible /chat/completions</strong>
+            </div>
+            <div role="row">
+              <span role="cell">Privacy</span>
+              <strong role="cell">只发送最小化应用摘要，payload 默认限制在 1024 bytes</strong>
+            </div>
+            <div role="row">
+              <span role="cell">Flavor</span>
+              <strong role="cell">DIRECT: 完整能力；MAS: 禁用 TCC 读取和卸载删除</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="download" class="download-section section-grid">
+        <div class="download-copy reveal">
+          <p class="eyebrow">Developer Preview</p>
+          <h2>下载 App Dock 1.0 预览版</h2>
+          <p>
+            当前包适合本机验证和内部试用。若要公开分发，仍需要 Developer ID 签名、公证和 stapling 流程。
+          </p>
+        </div>
+        <div class="download-actions reveal">
+          <a class="button primary" href="downloads/App-Dock-1.0.dmg">下载 DMG</a>
+          <a class="button secondary" href="https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution">分发说明</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>App Dock</span>
+      <span>2026</span>
+      <span>AI-native macOS audit engine</span>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

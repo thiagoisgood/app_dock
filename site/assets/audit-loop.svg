@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">App Dock audit loop</title>
+  <desc id="desc">A black and white line diagram showing the App Dock loop from scan to evidence to signal to action.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L8,3 z" fill="#111"/>
+    </marker>
+    <style>
+      .box{fill:#fffdf7;stroke:#111;stroke-width:2}
+      .label{font:700 24px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;fill:#111}
+      .meta{font:700 13px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#68645c}
+      .route{fill:none;stroke:#111;stroke-width:2.5;stroke-dasharray:12 10;marker-end:url(#arrow)}
+      .accent{fill:#14b8a6;stroke:#111;stroke-width:2}
+      .warn{fill:#ef4444;stroke:#111;stroke-width:2}
+      .note{fill:#f4c430;stroke:#111;stroke-width:2}
+      @media (prefers-reduced-motion: no-preference) {
+        .route { animation: dash 7s linear infinite; }
+        @keyframes dash { to { stroke-dashoffset: -176; } }
+      }
+    </style>
+  </defs>
+  <rect x="1" y="1" width="1198" height="418" fill="#fffdf7" stroke="#111" stroke-width="2"/>
+  <path d="M170 210 C250 70 420 70 500 210" class="route"/>
+  <path d="M630 210 C710 70 880 70 960 210" class="route"/>
+  <path d="M960 250 C860 380 350 380 230 250" class="route"/>
+
+  <g transform="translate(70 125)">
+    <rect width="220" height="130" class="box"/>
+    <circle cx="36" cy="38" r="13" class="accent"/>
+    <text x="64" y="45" class="label">扫描</text>
+    <text x="28" y="82" class="meta">/Applications</text>
+    <text x="28" y="108" class="meta">Bundle + Info.plist</text>
+  </g>
+
+  <g transform="translate(370 125)">
+    <rect width="220" height="130" class="box"/>
+    <rect x="25" y="26" width="26" height="26" class="note"/>
+    <text x="64" y="45" class="label">证据</text>
+    <text x="28" y="82" class="meta">codesign / TCC / ps</text>
+    <text x="28" y="108" class="meta">source + runtime</text>
+  </g>
+
+  <g transform="translate(670 125)">
+    <rect width="220" height="130" class="box"/>
+    <path d="M38 22 56 56H20Z" class="warn"/>
+    <text x="64" y="45" class="label">信号</text>
+    <text x="28" y="82" class="meta">risk heuristics</text>
+    <text x="28" y="108" class="meta">semantic ranking</text>
+  </g>
+
+  <g transform="translate(970 125)">
+    <rect width="160" height="130" class="box"/>
+    <path d="M30 32h40v34H30zM38 24h24v8H38z" fill="#fffdf7" stroke="#111" stroke-width="2"/>
+    <text x="82" y="45" class="label">行动</text>
+    <text x="28" y="82" class="meta">update</text>
+    <text x="28" y="108" class="meta">clean</text>
+  </g>
+
+  <g transform="translate(78 314)">
+    <text class="meta">DIRECT build keeps TCC read, signature audit, update probe, and uninstall cleanup available.</text>
+  </g>
+</svg>
