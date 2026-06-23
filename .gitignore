@@ -50,3 +50,5 @@ DerivedData/
 *.tmp
 *.temp
 *~
+app_dock/.DS_Store
+app_dock/app_dock.xcodeproj/project.xcworkspace/xcuserdata/thiago.xcuserdatad/UserInterfaceState.xcuserstate
