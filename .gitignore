@@ -50,3 +50,4 @@ DerivedData/
 *.tmp
 *.temp
 *~
+app_dock/.DS_Store
