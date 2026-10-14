@@ -5,7 +5,7 @@ struct AppCacheStore {
 
     private var cacheURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("AppDockAuditEngine", isDirectory: true)
+        let dir = appSupport.appendingPathComponent("OpenDock", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent(fileName)
     }

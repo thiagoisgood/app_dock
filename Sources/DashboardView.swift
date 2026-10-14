@@ -633,122 +633,140 @@ private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("OpenAI 兼容设置").font(.headline)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("OpenAI 兼容设置").font(.headline)
 
-            TextField("API Key", text: $viewModel.apiKey)
-                .textFieldStyle(.roundedBorder)
-            TextField("Base URL", text: $viewModel.baseURL)
-                .textFieldStyle(.roundedBorder)
-            TextField("Model", text: $viewModel.model)
-                .textFieldStyle(.roundedBorder)
-
-            Divider()
-
-            // Token Usage Statistics
-            Text("Token 使用统计").font(.headline)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("总Token:")
-                        .foregroundStyle(.secondary)
-                    Text("\(viewModel.tokenUsageSummary.totalTokens)")
-                        .fontWeight(.medium)
-                }
-                HStack {
-                    Text("Prompt Token:")
-                        .foregroundStyle(.secondary)
-                    Text("\(viewModel.tokenUsageSummary.totalPromptTokens)")
-                }
-                HStack {
-                    Text("Completion Token:")
-                        .foregroundStyle(.secondary)
-                    Text("\(viewModel.tokenUsageSummary.totalCompletionTokens)")
-                }
-                HStack {
-                    Text("总花费:")
-                        .foregroundStyle(.secondary)
-                    Text("$\(String(format: "%.4f", viewModel.tokenUsageSummary.totalCost))")
-                        .fontWeight(.medium)
-                        .foregroundStyle(.purple)
-                }
-                if !viewModel.tokenUsageSummary.operationCounts.isEmpty {
-                    Text("操作统计:")
-                        .foregroundStyle(.secondary)
-                    ForEach(viewModel.tokenUsageSummary.operationCounts.keys.sorted(), id: \.self) { op in
-                        Text("• \(op): \(viewModel.tokenUsageSummary.operationCounts[op] ?? 0) 次")
-                            .font(.caption)
+                SecureField("API Key", text: $viewModel.apiKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Base URL", text: $viewModel.baseURL)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Model", text: $viewModel.model)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("允许向此 AI 服务发送应用元数据", isOn: $viewModel.metadataSharingAllowed)
+                    .onChange(of: viewModel.metadataSharingAllowed) { allowed in
+                        if !allowed { AIPrivacyPolicy.saveConsent(false, endpoint: viewModel.baseURL) }
                     }
+                Text("默认关闭。启用并保存后，会向填写的 HTTPS 服务发送应用名称、Bundle ID、来源、权限和资源摘要；本地路径与凭据会被过滤。更换服务地址需重新保存授权。API Key 保存到钥匙串。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("保留本地搜索与使用记录", isOn: $viewModel.localHistoryEnabled)
+                Button("清除本机缓存与记录", role: .destructive) { viewModel.clearLocalData() }
+                    .disabled(viewModel.isAIProcessing || viewModel.isOrganizing || viewModel.isGeneratingReport || viewModel.isUpdatingMappings || viewModel.isLoading)
+                if let status = viewModel.privacyStatus { Text(status).font(.caption) }
+                Text("搜索与使用记录默认不保存。应用缓存仅保存在本机 OpenDock 目录，清除不会影响旧版应用的数据。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let error = viewModel.credentialError {
+                    Text(error).font(.caption).foregroundStyle(.red)
                 }
-                Text("最后更新: \(viewModel.tokenUsageSummary.lastUpdated.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(10)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
 
-            Divider()
+                Divider()
 
-            // Search Mappings
-            Text("搜索映射").font(.headline)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("当前映射数量:")
-                        .foregroundStyle(.secondary)
-                    Text("\(viewModel.searchMappings.count)")
-                        .fontWeight(.medium)
-                }
-                if viewModel.isUpdatingMappings {
+                // Token Usage Statistics
+                Text("Token 使用统计").font(.headline)
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        ProgressView().controlSize(.small)
-                        Text("正在更新...")
+                        Text("总Token:")
                             .foregroundStyle(.secondary)
+                        Text("\(viewModel.tokenUsageSummary.totalTokens)")
+                            .fontWeight(.medium)
                     }
-                } else {
-                    Button("更新搜索映射") {
-                        Task { await viewModel.updateSearchMappings() }
+                    HStack {
+                        Text("Prompt Token:")
+                            .foregroundStyle(.secondary)
+                        Text("\(viewModel.tokenUsageSummary.totalPromptTokens)")
+                    }
+                    HStack {
+                        Text("Completion Token:")
+                            .foregroundStyle(.secondary)
+                        Text("\(viewModel.tokenUsageSummary.totalCompletionTokens)")
+                    }
+                    HStack {
+                        Text("总花费:")
+                            .foregroundStyle(.secondary)
+                        Text("$\(String(format: "%.4f", viewModel.tokenUsageSummary.totalCost))")
+                            .fontWeight(.medium)
+                            .foregroundStyle(.purple)
+                    }
+                    if !viewModel.tokenUsageSummary.operationCounts.isEmpty {
+                        Text("操作统计:")
+                            .foregroundStyle(.secondary)
+                        ForEach(viewModel.tokenUsageSummary.operationCounts.keys.sorted(), id: \.self) { op in
+                            Text("• \(op): \(viewModel.tokenUsageSummary.operationCounts[op] ?? 0) 次")
+                                .font(.caption)
+                        }
+                    }
+                    Text("最后更新: \(viewModel.tokenUsageSummary.lastUpdated.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+
+                Divider()
+
+                // Search Mappings
+                Text("搜索映射").font(.headline)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("当前映射数量:")
+                            .foregroundStyle(.secondary)
+                        Text("\(viewModel.searchMappings.count)")
+                            .fontWeight(.medium)
+                    }
+                    if viewModel.isUpdatingMappings {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("正在更新...")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button("更新搜索映射") {
+                            Task { await viewModel.updateSearchMappings() }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    if !viewModel.searchMappings.isEmpty {
+                        Text("映射类别:")
+                            .foregroundStyle(.secondary)
+                        ScrollView {
+                            ForEach(viewModel.searchMappings.sorted(by: { $0.category < $1.category }), id: \.id) { mapping in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mapping.category)
+                                        .font(.caption.bold())
+                                    Text("关键词: \(mapping.keywords.prefix(5).joined(separator: ", "))...")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                        .frame(maxHeight: 120)
+                    }
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+
+                HStack {
+                    Button("清除统计") {
+                        viewModel.tokenUsageStore.clearHistory()
+                        viewModel.tokenUsageSummary = viewModel.tokenUsageStore.getSummary()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                }
-                if !viewModel.searchMappings.isEmpty {
-                    Text("映射类别:")
-                        .foregroundStyle(.secondary)
-                    ScrollView {
-                        ForEach(viewModel.searchMappings.sorted(by: { $0.category < $1.category }), id: \.id) { mapping in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(mapping.category)
-                                    .font(.caption.bold())
-                                Text("关键词: \(mapping.keywords.prefix(5).joined(separator: ", "))...")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                        }
+                    Spacer()
+                    Button("保存并关闭") {
+                        if viewModel.saveAPISettings() { dismiss() }
                     }
-                    .frame(maxHeight: 120)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
-            .padding(10)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
-
-            HStack {
-                Button("清除统计") {
-                    viewModel.tokenUsageStore.clearHistory()
-                    viewModel.tokenUsageSummary = viewModel.tokenUsageStore.getSummary()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                Spacer()
-                Button("保存并关闭") {
-                    viewModel.saveAPISettings()
-                    dismiss()
-                }
-                    .keyboardShortcut(.defaultAction)
-            }
+            .padding(20)
         }
-        .padding(20)
-        .frame(width: 500, height: 600)
+        .frame(width: 600, height: 700)
     }
 }

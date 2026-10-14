@@ -5,9 +5,9 @@ name: Swift
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "openDock" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "openDock" ]
 
 jobs:
   build:
@@ -16,7 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Check tracked privacy patterns
+      run: python3 scripts/check-privacy.py
     - name: Build
       run: swift build -v
-    - name: Run tests
-      run: swift test -v
+    - name: Test privacy regressions
+      run: swift test
+    - name: Build MAS flavor
+      run: swift build -Xswiftc -DAPP_FLAVOR_MAS

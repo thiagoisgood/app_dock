@@ -75,7 +75,7 @@ The flavor is controlled via Swift compiler flags in `Package.swift` (`APP_FLAVO
 
 ## Key Design Notes
 
-- **No test suite exists** — the project currently has no `Tests/` directory.
+- **Privacy regression tests** — `Tests/PrivacyTests` uses isolated preferences and network/secret-storage stubs; run `swift test` with the full Xcode toolchain.
 - All shell execution goes through `ShellExecutor` (async `Process` wrapper).
 - The `AuditPipeline` is the main data flow: scan → source → signature → TCC → permissions → metrics → `AppRecord`.
 - AI payloads are sanitized to ≤1024 bytes via `SanitizedJsonBuilder` (truncates from the end).

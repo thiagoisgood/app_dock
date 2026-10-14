@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">App Dock · 合成演示界面</title>
+  <desc id="desc">四个虚构应用展示审计布局，不包含真实个人应用、权限记录或本机路径。</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; fill: #27342f; }
+      .muted { fill: #79847e; font-size: 14px; }
+      .label { font-size: 16px; }
+      .title { font-size: 20px; font-weight: 600; }
+      .number { font-size: 32px; font-weight: 600; }
+      .line { stroke: #dfe5df; stroke-width: 1; }
+    </style>
+  </defs>
+  <rect width="1200" height="720" rx="18" fill="#f6f8f5"/>
+  <rect x="0" y="0" width="1200" height="62" rx="18" fill="#edf1ec"/>
+  <circle cx="26" cy="30" r="6" fill="#bec8bd"/><circle cx="47" cy="30" r="6" fill="#bec8bd"/><circle cx="68" cy="30" r="6" fill="#bec8bd"/>
+  <text x="98" y="37" class="title">App Dock</text>
+  <rect x="933" y="17" width="235" height="29" rx="14" fill="#ffffff"/>
+  <text x="952" y="37" class="muted">合成演示 · 非真实设备数据</text>
+  <path d="M218 62V720 M865 62V720" class="line"/>
+  <text x="26" y="109" class="muted">审计范围</text>
+  <rect x="14" y="128" width="191" height="42" rx="9" fill="#dcece4"/>
+  <text x="32" y="154" class="label">全部应用</text><text x="181" y="154" class="label">4</text>
+  <text x="32" y="202" class="label">高风险</text><text x="32" y="247" class="label">第三方</text>
+  <text x="32" y="292" class="label">敏感权限</text><text x="32" y="337" class="label">后台常驻</text>
+  <text x="26" y="403" class="muted">分组</text><text x="32" y="442" class="label">来源</text>
+  <text x="32" y="487" class="label">类别</text><text x="32" y="532" class="label">最近常用</text>
+  <text x="26" y="638" class="muted">AI 外发：默认关闭</text><text x="26" y="668" class="muted">本地搜索可独立使用</text>
+  <rect x="241" y="88" width="186" height="111" rx="12" fill="#e7eee7"/>
+  <rect x="440" y="88" width="186" height="111" rx="12" fill="#f2e7e2"/>
+  <rect x="639" y="88" width="203" height="111" rx="12" fill="#e0eee9"/>
+  <text x="259" y="120" class="muted">演示应用</text><text x="259" y="171" class="number">4</text>
+  <text x="458" y="120" class="muted">高风险示例</text><text x="458" y="171" class="number">1</text>
+  <text x="657" y="120" class="muted">敏感权限示例</text><text x="657" y="171" class="number">2</text>
+  <text x="242" y="246" class="muted">应用</text><text x="543" y="246" class="muted">来源</text>
+  <text x="664" y="246" class="muted">风险</text><text x="770" y="246" class="muted">资源</text>
+  <path d="M241 263H842 M241 353H842 M241 443H842 M241 533H842 M241 623H842" class="line"/>
+  <rect x="241" y="274" width="601" height="71" rx="10" fill="#e6efe8"/>
+  <rect x="259" y="288" width="43" height="43" rx="12" fill="#789d83"/>
+  <text x="272" y="317" fill="#ffffff" font-size="21">N</text>
+  <text x="319" y="306" class="title">示例笔记</text><text x="319" y="330" class="muted">生产力 · 合成应用</text>
+  <text x="543" y="315" class="label">App Store</text><text x="670" y="315" class="label">低</text><text x="770" y="315" class="label">0.0%</text>
+  <rect x="259" y="378" width="43" height="43" rx="12" fill="#c48d75"/>
+  <text x="272" y="407" fill="#ffffff" font-size="21">M</text>
+  <text x="319" y="396" class="title">示例会议</text><text x="319" y="420" class="muted">协作 · 合成应用</text>
+  <text x="543" y="405" class="label">第三方</text><text x="670" y="405" class="label">高</text><text x="770" y="405" class="label">1.2%</text>
+  <rect x="259" y="468" width="43" height="43" rx="12" fill="#8094b4"/>
+  <text x="272" y="497" fill="#ffffff" font-size="21">D</text>
+  <text x="319" y="486" class="title">示例画板</text><text x="319" y="510" class="muted">创作 · 合成应用</text>
+  <text x="543" y="495" class="label">App Store</text><text x="670" y="495" class="label">低</text><text x="770" y="495" class="label">0.0%</text>
+  <rect x="259" y="558" width="43" height="43" rx="12" fill="#a39b7b"/>
+  <text x="272" y="587" fill="#ffffff" font-size="21">T</text>
+  <text x="319" y="576" class="title">示例工具</text><text x="319" y="600" class="muted">实用工具 · 合成应用</text>
+  <text x="543" y="585" class="label">第三方</text><text x="670" y="585" class="label">低</text><text x="770" y="585" class="label">0.0%</text>
+  <text x="242" y="676" class="muted">应用名称、数量及资源占用均为虚构演示数据</text>
+  <text x="891" y="110" class="title">示例笔记</text><text x="891" y="140" class="muted">生产力 · 合成应用</text>
+  <rect x="887" y="170" width="289" height="161" rx="12" fill="#e9eeea"/>
+  <text x="906" y="204" class="label">身份与来源</text><text x="906" y="240" class="muted">来源</text><text x="989" y="240" class="label">App Store</text>
+  <text x="906" y="275" class="muted">签名</text><text x="989" y="275" class="label">示例可信签名</text>
+  <text x="906" y="308" class="muted">路径</text><text x="989" y="308" class="label">未展示本机路径</text>
+  <rect x="887" y="351" width="289" height="144" rx="12" fill="#e9eeea"/>
+  <text x="906" y="385" class="label">权限矩阵</text><text x="906" y="424" class="muted">摄像头</text><text x="1068" y="424" class="label">未请求</text>
+  <text x="906" y="465" class="muted">麦克风</text><text x="1068" y="465" class="label">未请求</text>
+  <rect x="887" y="515" width="289" height="144" rx="12" fill="#e9eeea"/>
+  <text x="906" y="549" class="label">隐私设置</text><text x="906" y="589" class="muted">AI 元数据分享</text><text x="1090" y="589" class="label">关闭</text>
+  <text x="906" y="627" class="muted">启用前请确认服务地址和外发范围</text>
+</svg>

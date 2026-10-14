@@ -21,7 +21,7 @@ final class AppNameAliasStore {
 
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("AppDockAuditEngine")
+        let dir = appSupport.appendingPathComponent("OpenDock")
         if !FileManager.default.fileExists(atPath: dir.path) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }

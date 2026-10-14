@@ -19,6 +19,11 @@ let package = Package(
             swiftSettings: [
                 .define("APP_FLAVOR_DIRECT")
             ]
+        ),
+        .testTarget(
+            name: "PrivacyTests",
+            dependencies: ["AppDockAuditEngine"],
+            path: "Tests/PrivacyTests"
         )
     ]
 )

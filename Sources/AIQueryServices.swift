@@ -20,7 +20,19 @@ struct AICompletionResult {
 }
 
 struct OpenAICompatibleAdapter: AIProviderAdapter {
-    private let session: URLSession = .shared
+    private static let defaultSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: AITransportDelegate(), delegateQueue: nil)
+    }()
+    private let session: URLSession
+    private let defaults: UserDefaults
+
+    init(session: URLSession? = nil, defaults: UserDefaults = .standard) {
+        self.session = session ?? Self.defaultSession
+        self.defaults = defaults
+    }
 
     func complete(prompt: String, payload: Data, config: AIProviderConfig) async throws -> AICompletionResult {
         return try await complete(
@@ -38,7 +50,8 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         payload: Data = Data("[]".utf8),
         config: AIProviderConfig
     ) async throws -> AICompletionResult {
-        guard let baseURL = URL(string: config.baseURL) else {
+        try AIPrivacyPolicy.authorize(config.baseURL, defaults: defaults)
+        guard let baseURL = URL(string: AIPrivacyPolicy.normalizedEndpoint(config.baseURL)) else {
             throw AIProviderError.invalidBaseURL
         }
 
@@ -60,8 +73,8 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
             temperature: config.temperature,
             max_tokens: config.maxTokens,
             messages: [
-                .init(role: "system", content: systemPrompt),
-                .init(role: "user", content: userContent)
+                .init(role: "system", content: AIPrivacyPolicy.sanitize(systemPrompt, apiKey: config.apiKey)),
+                .init(role: "user", content: AIPrivacyPolicy.sanitize(userContent, apiKey: config.apiKey))
             ]
         )
         request.httpBody = try JSONEncoder().encode(body)
@@ -70,7 +83,7 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw AIProviderError.network(error.localizedDescription)
+            throw AIProviderError.network("无法连接 AI 服务")
         }
         guard let http = response as? HTTPURLResponse else {
             throw AIProviderError.network("无效响应")
@@ -80,7 +93,7 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         case 200...299:
             break
         case 400:
-            throw AIProviderError.badRequest(String(decoding: data, as: UTF8.self))
+            throw AIProviderError.badRequest("请检查模型与请求配置")
         case 401, 403:
             throw AIProviderError.unauthorized
         case 429:
@@ -99,6 +112,16 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
             promptTokens: parsed.usage?.prompt_tokens,
             completionTokens: parsed.usage?.completion_tokens
         )
+    }
+}
+
+private final class AITransportDelegate: NSObject, URLSessionTaskDelegate {
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
+                               willPerformHTTPRedirection response: HTTPURLResponse,
+                               newRequest request: URLRequest,
+                               completionHandler: @escaping (URLRequest?) -> Void) {
+        // Sharing consent applies only to the configured endpoint, never a redirect target.
+        completionHandler(nil)
     }
 }
 
@@ -248,7 +271,7 @@ struct AITaggingService {
             guard let start = cleanResponse.firstIndex(of: "{"),
                   let end = cleanResponse.lastIndex(of: "}"),
                   let data = String(cleanResponse[start...end]).data(using: .utf8) else {
-                print("[AI] Tagging: no JSON found in response. Prefix: \(response.prefix(150))")
+                print("[AI] Tagging: no JSON found in response")
                 continue
             }
 
@@ -259,7 +282,7 @@ struct AITaggingService {
                     allTags[key] = value
                 }
             } catch {
-                print("[AI] Tagging decode error: \(error)")
+                print("[AI] Tagging decode failed")
                 // Try to decode one by one to salvage partial results
                 if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     for (key, value) in dict {

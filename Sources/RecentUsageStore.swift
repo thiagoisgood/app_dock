@@ -9,6 +9,7 @@ struct RecentUsageStore {
     private let key = "app.recentUsage"
 
     func load() -> [String: AppUsageRecord] {
+        guard LocalDataPrivacy.historyEnabled() else { return [:] }
         guard let data = UserDefaults.standard.data(forKey: key),
               let records = try? JSONDecoder().decode([String: AppUsageRecord].self, from: data) else {
             return [:]
@@ -17,6 +18,7 @@ struct RecentUsageStore {
     }
 
     func save(_ records: [String: AppUsageRecord]) {
+        guard LocalDataPrivacy.historyEnabled() else { return }
         guard let data = try? JSONEncoder().encode(records) else { return }
         UserDefaults.standard.set(data, forKey: key)
     }

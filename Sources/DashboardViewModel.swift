@@ -13,7 +13,11 @@ final class DashboardViewModel: ObservableObject {
     @Published var updateSuggestions: [UpdateSuggestion] = []
     @Published var isLoading = false
     @Published var showSettings = false
-    @Published var apiKey: String = UserDefaults.standard.string(forKey: "ai.apiKey") ?? ""
+    @Published var apiKey: String = ""
+    @Published var credentialError: String?
+    @Published var localHistoryEnabled: Bool = LocalDataPrivacy.historyEnabled()
+    @Published var privacyStatus: String?
+    @Published var metadataSharingAllowed: Bool = AIPrivacyPolicy.allowsAI(for: UserDefaults.standard.string(forKey: "ai.baseURL") ?? "https://api.openai.com/v1")
     @Published var baseURL: String = UserDefaults.standard.string(forKey: "ai.baseURL") ?? "https://api.openai.com/v1"
     @Published var model: String = UserDefaults.standard.string(forKey: "ai.model") ?? "gpt-4o-mini"
     @Published var capabilityStatuses: [CapabilityStatus] = []
@@ -38,8 +42,8 @@ final class DashboardViewModel: ObservableObject {
     private let riskEngine = PermissionHeuristicsEngine()
     private let categoryClassifier = AppCategoryClassifier()
     private let classifierService = AppClassifierService()
-    private let cacheStore = AppCacheStore()
-    private let tagStore = AppTagStore()
+    private var cacheStore = AppCacheStore()
+    private var tagStore = AppTagStore()
     private var recentUsageStore = RecentUsageStore()
     private let taggingService = AITaggingService()
     private var nlSearch: AINaturalLanguageSearch {
@@ -52,11 +56,11 @@ final class DashboardViewModel: ObservableObject {
         )
     }
     private(set) var tokenUsageStore = TokenUsageStore()  // Public getter for UI
-    private let searchMappingStore = SearchMappingStore()
+    private var searchMappingStore = SearchMappingStore()
     private let searchMappingGenerator = AISearchMappingGenerator()
-    private let classificationStore = AIClassificationStore()
-    private let feedbackStore = SearchFeedbackStore()
-    private let aliasStore = AppNameAliasStore()
+    private var classificationStore = AIClassificationStore()
+    private var feedbackStore = SearchFeedbackStore()
+    private var aliasStore = AppNameAliasStore()
     private var lastGoodAIExplanation: String = ""
 
     // 搜索反馈追踪
@@ -69,10 +73,57 @@ final class DashboardViewModel: ObservableObject {
     @Published var searchMappings: [SearchMapping] = []
     @Published var isUpdatingMappings = false
 
-    func saveAPISettings() {
-        UserDefaults.standard.set(apiKey, forKey: "ai.apiKey")
-        UserDefaults.standard.set(baseURL, forKey: "ai.baseURL")
-        UserDefaults.standard.set(model, forKey: "ai.model")
+    init() {
+        do { apiKey = try APIKeyStore().load() }
+        catch { credentialError = "无法读取或迁移钥匙串中的 API Key，请重新配置。" }
+    }
+
+    var canUseAI: Bool {
+        metadataSharingAllowed && !apiKey.isEmpty && AIPrivacyPolicy.allowsAI(for: baseURL)
+    }
+
+    @discardableResult
+    func saveAPISettings() -> Bool {
+        do {
+            if metadataSharingAllowed { try AIPrivacyPolicy.validateEndpoint(baseURL) }
+            if !localHistoryEnabled { try LocalDataPrivacy.clearHistory() }
+            try APIKeyStore().save(apiKey)
+            UserDefaults.standard.set(baseURL, forKey: "ai.baseURL")
+            UserDefaults.standard.set(model, forKey: "ai.model")
+            AIPrivacyPolicy.saveConsent(metadataSharingAllowed, endpoint: baseURL)
+            UserDefaults.standard.set(localHistoryEnabled, forKey: "privacy.localHistoryEnabled")
+            feedbackStore = SearchFeedbackStore()
+            searchLearningStats = feedbackStore.stats
+            credentialError = nil
+            return true
+        } catch {
+            credentialError = error.localizedDescription
+            return false
+        }
+    }
+
+    func clearLocalData() {
+        do {
+            try LocalDataPrivacy.clear()
+            cacheStore = AppCacheStore()
+            tagStore = AppTagStore()
+            searchMappingStore = SearchMappingStore()
+            classificationStore = AIClassificationStore()
+            feedbackStore = SearchFeedbackStore()
+            aliasStore = AppNameAliasStore()
+            tokenUsageStore = TokenUsageStore()
+            appTags = [:]
+            aiCategories = [:]
+            aiCategoryDescriptions = [:]
+            searchMappings = searchMappingStore.getMappings()
+            searchLearningStats = feedbackStore.stats
+            tokenUsageSummary = tokenUsageStore.getSummary()
+            aiReport = ""
+            aiDigest = ""
+            privacyStatus = "已清除 OpenDock 的本机缓存与记录。凭据保留在钥匙串；重新扫描会生成新的应用缓存。"
+        } catch {
+            privacyStatus = "无法完整清除本机记录，请检查文件权限后重试。"
+        }
     }
 
     func bootstrap() async {
@@ -110,10 +161,10 @@ final class DashboardViewModel: ObservableObject {
 
         // 4. AI strategy: only run if no cached results OR API key just changed
         let hasCachedAI = !aiCategories.isEmpty
-        if !apiKey.isEmpty && !hasCachedAI {
+        if canUseAI && !hasCachedAI {
             // 首次配置或缓存清空：运行完整 AI 分类
             await runAIBackgroundTasks()
-        } else if !apiKey.isEmpty && hasCachedAI {
+        } else if canUseAI && hasCachedAI {
             // 有缓存：只检查新应用
             let cachedApps = cacheStore.load() ?? []
             let cachedBundleIDs = Set(cachedApps.compactMap { $0.bundleID })
@@ -134,7 +185,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func updateSearchMappings() async {
-        guard !apiKey.isEmpty else { return }
+        guard canUseAI else { return }
         isUpdatingMappings = true
         defer { isUpdatingMappings = false }
 
@@ -153,7 +204,7 @@ final class DashboardViewModel: ObservableObject {
             tokenUsageSummary = tokenUsageStore.getSummary()
             print("[ViewModel] Updated search mappings: \(newMappings.count) categories")
         } catch {
-            print("[ViewModel] Failed to update search mappings: \(error.localizedDescription)")
+            print("[ViewModel] Failed to update search mappings")
         }
     }
 
@@ -190,7 +241,7 @@ final class DashboardViewModel: ObservableObject {
         isLoading = false
 
         // Process newly installed apps if API configured
-        if !apiKey.isEmpty && !newlyInstalled.isEmpty {
+        if canUseAI && !newlyInstalled.isEmpty {
             await processNewlyInstalledApps(newlyInstalled)
         }
 
@@ -247,7 +298,7 @@ final class DashboardViewModel: ObservableObject {
                 aliasStore.updateAliases(newAliases)
             }
         } catch {
-            print("[AI] Failed to update name aliases: \(error.localizedDescription)")
+            print("[AI] Failed to update name aliases")
         }
 
         aiAssistantText = buildAIAssistantSummary()
@@ -266,7 +317,7 @@ final class DashboardViewModel: ObservableObject {
             maxTokens: 2000
         )
 
-        print("[AI] Starting background tasks with model: \(config.model), baseURL: \(config.baseURL)")
+        print("[AI] Starting authorized background tasks")
 
         // 1. 统一分类+标签（替代原有的 tagging + organization 两次调用）
         aiProcessingProgress = "正在进行AI整理..."
@@ -312,7 +363,7 @@ final class DashboardViewModel: ObservableObject {
                     print("[AI] Generated \(newAliases.count) name aliases")
                 }
             } catch {
-                print("[AI] Failed to generate name aliases: \(error.localizedDescription)")
+                print("[AI] Failed to generate name aliases")
             }
         }
 

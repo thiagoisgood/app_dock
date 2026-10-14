@@ -6,7 +6,7 @@
     <title>App Dock - AI-Native macOS App Audit</title>
     <meta
       name="description"
-      content="App Dock 是一款 AI-native macOS 应用审计工具，公开预览版已完成 Developer ID 签名、公证和 stapling，可从 GitHub Release 下载。"
+      content="App Dock 是一款 macOS 应用审计工具。此页面使用合成演示数据，提供隐私清理后的源码构建说明。"
     >
     <meta name="theme-color" content="#f7f4eb">
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
@@ -25,7 +25,7 @@
         <a href="#manual">审计手册</a>
         <a href="#screens">界面</a>
         <a href="#architecture">架构</a>
-        <a href="#download">下载</a>
+        <a href="#download">构建</a>
       </nav>
     </header>
 
@@ -38,21 +38,21 @@
             把 Mac 上的应用清单、来源、签名、权限、后台占用和更新线索整理成一张可查询的审计桌面。
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="https://github.com/REPOSITORY_OWNER/app_dock/releases" data-release-download>下载公开预览版</a>
+            <a class="button primary" href="#download">本地构建说明</a>
             <a class="button secondary" href="#architecture">查看系统结构</a>
           </div>
           <div class="release-panel" aria-live="polite">
             <div>
               <span>Downloads</span>
-              <strong data-release-count>读取中</strong>
+              <strong data-release-count>暂不提供</strong>
             </div>
             <div>
               <span>Version</span>
-              <strong data-release-version>GitHub Release</strong>
+              <strong data-release-version>源码版</strong>
             </div>
             <div>
               <span>Status</span>
-              <strong data-release-status>公开预览版</strong>
+              <strong data-release-status>隐私清理版</strong>
             </div>
           </div>
           <dl class="hero-facts" aria-label="项目事实">
@@ -71,30 +71,30 @@
           </dl>
         </div>
 
-        <div class="hero-plate reveal" aria-label="App Dock 应用界面截图">
+        <div class="hero-plate reveal" aria-label="App Dock 合成演示界面">
           <div class="plate-label">
             <span>SCREEN 01</span>
-            <span>Audit dashboard</span>
+            <span>Synthetic demo</span>
           </div>
-          <img src="assets/app-dock-dashboard.png" alt="App Dock 审计仪表盘，显示应用列表、风险指标、权限矩阵和一键卸载清理区域">
+          <img src="assets/app-dock-demo.svg" alt="App Dock 合成演示图，不包含真实用户的应用或目录">
         </div>
       </section>
 
-      <section class="index-strip" aria-label="示例扫描指标">
+      <section class="index-strip" aria-label="合成演示指标">
         <div>
-          <span class="metric-number">152</span>
-          <span class="metric-label">应用样本</span>
+          <span class="metric-number">4</span>
+          <span class="metric-label">演示应用</span>
         </div>
         <div>
-          <span class="metric-number danger">36</span>
+          <span class="metric-number danger">1</span>
           <span class="metric-label">高风险项</span>
         </div>
         <div>
-          <span class="metric-number accent">64</span>
+          <span class="metric-number accent">2</span>
           <span class="metric-label">敏感权限</span>
         </div>
         <div>
-          <span class="metric-number">54</span>
+          <span class="metric-number">1</span>
           <span class="metric-label">后台常驻</span>
         </div>
       </section>
@@ -140,11 +140,11 @@
           </div>
         </div>
         <figure class="screenshot-board reveal">
-          <img src="assets/app-dock-dashboard.png" alt="App Dock 主界面截图">
+          <img src="assets/app-dock-demo.svg" alt="App Dock 合成演示图">
           <figcaption>
             <span>Plate 02</span>
             <strong>风险优先的应用资产视图</strong>
-            <em>截图中的示例扫描展示了高风险、第三方、敏感权限、后台常驻和可更新等审计入口。</em>
+            <em>本图仅使用合成应用名称和示例指标，不代表任何真实设备的扫描结果。</em>
           </figcaption>
         </figure>
       </section>
@@ -218,7 +218,7 @@
             </div>
             <div role="row">
               <span role="cell">Privacy</span>
-              <strong role="cell">只发送最小化应用摘要，payload 默认限制在 1024 bytes</strong>
+              <strong role="cell">AI 默认关闭；授权后发送应用元数据；凭据存入钥匙串</strong>
             </div>
             <div role="row">
               <span role="cell">Flavor</span>
@@ -231,33 +231,33 @@
       <section id="download" class="download-section section-grid">
         <div class="download-copy reveal">
           <p class="eyebrow">Developer Preview</p>
-          <h2>下载 App Dock 1.0 预览版</h2>
+          <h2>从源码构建 App Dock</h2>
           <p>
-            公开预览版已经完成 Developer ID 签名、公证和 stapling。若 GitHub Release 已发布，页面会读取 Release asset 的真实下载次数；否则先使用站点 downloads 目录中的 DMG。
+            旧安装包已撤下。请在 macOS 上使用 Swift 或 Xcode 从当前源码构建；本页不提供旧包或自动回退下载。正式分发需由发布者自行配置签名与公证。
           </p>
         </div>
         <div class="download-panel reveal">
           <div class="release-ledger" aria-live="polite">
             <div>
               <span>文件</span>
-              <strong data-release-filename>正在读取 GitHub Release</strong>
+              <strong data-release-filename>源码构建</strong>
             </div>
             <div>
               <span>大小</span>
-              <strong data-release-size>--</strong>
+              <strong data-release-size>不提供 DMG</strong>
             </div>
             <div>
               <span>发布日期</span>
-              <strong data-release-date>--</strong>
+              <strong data-release-date>以源码提交为准</strong>
             </div>
             <div>
-              <span>下载次数</span>
-              <strong data-release-count>读取中</strong>
+              <span>安装包</span>
+              <strong data-release-count>暂不提供</strong>
             </div>
           </div>
           <div class="download-actions">
-            <a class="button primary" href="https://github.com/REPOSITORY_OWNER/app_dock/releases" data-release-download>下载 DMG</a>
-            <a class="button secondary" href="https://github.com/REPOSITORY_OWNER/app_dock/releases" data-release-link>GitHub Releases</a>
+            <code>swift build &amp;&amp; swift run</code>
+            <a class="button secondary" href="#architecture">查看构建能力</a>
           </div>
         </div>
       </section>

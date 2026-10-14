@@ -4,8 +4,6 @@ Packages/
 Package.resolved
 
 # Xcode
-*.xcodeproj/
-*.xcworkspace/
 *.swiftpm/
 xcuserdata/
 DerivedData/
@@ -50,4 +48,15 @@ DerivedData/
 *.tmp
 *.temp
 *~
-app_dock/.DS_Store
+
+# Local audit/runtime data and packaged releases
+output/
+.playwright-cli/
+*.dmg
+app-cache.json
+ai-classification.json
+search_feedback.json
+search_weights.json
+search_mappings.json
+app_name_aliases.json
+token_usage.json

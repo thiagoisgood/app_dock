@@ -1265,8 +1265,7 @@ private struct SettingsSheet: View {
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Button("保存并关闭") {
-                    viewModel.saveAPISettings()
-                    dismiss()
+                    if viewModel.saveAPISettings() { dismiss() }
                 }
                 .keyboardShortcut(.defaultAction)
             }
@@ -1295,9 +1294,26 @@ private struct AIProviderSettings: View {
 
     var body: some View {
         Form {
-            TextField("API Key", text: $viewModel.apiKey)
+            SecureField("API Key", text: $viewModel.apiKey)
             TextField("Base URL", text: $viewModel.baseURL)
             TextField("Model", text: $viewModel.model)
+            Toggle("允许向此 AI 服务发送应用元数据", isOn: $viewModel.metadataSharingAllowed)
+                .onChange(of: viewModel.metadataSharingAllowed) { allowed in
+                    if !allowed { AIPrivacyPolicy.saveConsent(false, endpoint: viewModel.baseURL) }
+                }
+            Text("默认关闭。启用并保存后，会向填写的 HTTPS 服务发送应用名称、Bundle ID、来源、权限和资源摘要；本地路径与凭据会被过滤。更换服务地址需重新保存授权。API Key 保存到钥匙串。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("保留本地搜索与使用记录", isOn: $viewModel.localHistoryEnabled)
+            Button("清除本机缓存与记录", role: .destructive) { viewModel.clearLocalData() }
+                .disabled(viewModel.isAIProcessing || viewModel.isOrganizing || viewModel.isGeneratingReport || viewModel.isUpdatingMappings || viewModel.isLoading)
+            if let status = viewModel.privacyStatus { Text(status).font(.caption) }
+            Text("搜索与使用记录默认不保存。应用缓存仅保存在本机 OpenDock 目录，清除不会影响旧版应用的数据。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let error = viewModel.credentialError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
         }
         .formStyle(.grouped)
     }

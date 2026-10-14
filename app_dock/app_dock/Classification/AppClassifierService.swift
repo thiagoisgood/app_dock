@@ -193,7 +193,7 @@ struct AppClassifierService {
                     ))
                 }
             } catch {
-                print("[Classifier] AI batch error: \(error.localizedDescription)")
+                print("[Classifier] AI batch error")
             }
         }
 
@@ -251,7 +251,7 @@ struct AppClassifierService {
                     }
                 }
             } catch {
-                print("[Classifier] AI classifyWithTags batch error: \(error.localizedDescription)")
+                print("[Classifier] AI classifyWithTags batch error")
             }
         }
 

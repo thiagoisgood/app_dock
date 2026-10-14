@@ -1,8 +1,9 @@
 #!/bin/bash
 # 自动同步 Sources/ 下的修改到 Xcode 项目目录
 
-SOURCES_DIR="${PROJECT_ROOT}/Sources"
-XCODE_DIR="${PROJECT_ROOT}/app_dock/app_dock"
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCES_DIR="$PROJECT_ROOT/Sources"
+XCODE_DIR="$PROJECT_ROOT/app_dock/app_dock"
 FILE_PATH="$1"
 
 if [ -z "$FILE_PATH" ]; then
