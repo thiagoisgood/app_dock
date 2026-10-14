@@ -7,7 +7,7 @@
 
 import Foundation
 import Testing
-@testable import app_dock
+@testable import App_Dock
 
 struct app_dockTests {
 
@@ -200,10 +200,97 @@ struct app_dockTests {
         #expect(policy.isEnabled(.uninstallDelete))
     }
 
+    @Test func launcherStateRanksAIRecommendedAppsFirst() async throws {
+        let xcode = makeApp(name: "Xcode", bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app")
+        let notes = makeApp(name: "Notes", bundleID: "com.apple.Notes", path: "/Applications/Notes.app")
+
+        let state = makeLauncherState(
+            apps: [notes, xcode],
+            filter: .aiRecommended,
+            aiCategories: ["com.apple.dt.Xcode": "开发工具"],
+            appTags: ["Xcode": ["编程"]]
+        )
+
+        #expect(state.items.first?.app.name == "Xcode")
+        #expect(state.summaryItems.first?.value == "Xcode")
+    }
+
+    @Test func launcherStateFiltersCategoryWithoutSearch() async throws {
+        let xcode = makeApp(name: "Xcode", bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app")
+        let figma = makeApp(name: "Figma", bundleID: "com.figma.Desktop", path: "/Applications/Figma.app")
+
+        let state = makeLauncherState(
+            apps: [xcode, figma],
+            filter: .category("设计创作"),
+            aiCategories: [
+                "com.apple.dt.Xcode": "开发工具",
+                "com.figma.Desktop": "设计创作"
+            ]
+        )
+
+        #expect(state.items.map(\.app.name) == ["Figma"])
+        #expect(state.title == "设计创作")
+    }
+
+    @Test func launcherStatePreservesSearchResultOrder() async throws {
+        let safari = makeApp(name: "Safari", bundleID: "com.apple.Safari", path: "/Applications/Safari.app")
+        let wechat = makeApp(name: "WeChat", bundleID: "com.tencent.xinWeChat", path: "/Applications/WeChat.app")
+
+        let state = makeLauncherState(
+            apps: [safari, wechat],
+            displayedApps: [wechat, safari],
+            filter: .aiRecommended,
+            hasActiveSearch: true
+        )
+
+        #expect(state.items.map(\.app.name) == ["WeChat", "Safari"])
+        #expect(state.title == "搜索结果")
+    }
+
+    @Test func launcherStateHandlesEmptyApps() async throws {
+        let state = makeLauncherState(apps: [], filter: .all)
+
+        #expect(state.items.isEmpty)
+        #expect(state.totalAppCount == 0)
+        #expect(state.summaryItems.first?.value == "等待扫描")
+    }
+
     private func uninstallPolicy(enabled: Bool) -> CapabilityPolicy {
         CapabilityPolicy(
             flavor: enabled ? .direct : .mas,
             featureAvailability: [.uninstallDelete: enabled]
+        )
+    }
+
+    private func makeLauncherState(
+        apps: [AppRecord],
+        displayedApps: [AppRecord]? = nil,
+        filter: LauncherFilter,
+        hasActiveSearch: Bool = false,
+        aiCategories: [String: String] = [:],
+        appTags: [String: [String]] = [:]
+    ) -> LauncherViewState {
+        LauncherViewState.build(
+            apps: apps,
+            displayedApps: displayedApps ?? apps,
+            filter: filter,
+            hasActiveSearch: hasActiveSearch,
+            selectedAppID: nil,
+            aiCategories: aiCategories,
+            aiConfidences: [:],
+            appTags: appTags,
+            searchHints: [:],
+            recentAppNames: [],
+            isAIProcessing: false,
+            workflowPeriod: "上午",
+            suggestedGroups: [],
+            resolveCategory: { app in
+                if let bundleID = app.bundleID, let category = aiCategories[bundleID] { return category }
+                return aiCategories[app.name] ?? "其他"
+            },
+            riskLevel: { _ in nil },
+            riskScore: { _ in 0 },
+            hasUpdateSuggestion: { _ in false }
         )
     }
 

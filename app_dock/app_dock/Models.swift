@@ -205,6 +205,12 @@ enum AIProviderError: Error, LocalizedError {
     }
 }
 
+/// AI 接口连通性测试结果
+enum ConnectionTestResult: Equatable {
+    case success(latency: TimeInterval, model: String)
+    case failure(message: String)
+}
+
 /// 报告统计摘要
 struct ReportStats {
     var totalApps: Int = 0

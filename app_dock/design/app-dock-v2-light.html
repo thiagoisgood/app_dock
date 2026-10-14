@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>App Dock V2 Light</title>
+<style>
+  :root {
+    color-scheme: light;
+    --canvas: #edf1f5;
+    --desktop-a: #f7f9fb;
+    --desktop-b: #e8edf2;
+    --window: rgba(255, 255, 255, 0.94);
+    --window-soft: rgba(255,255,255,0.70);
+    --sidebar: rgba(245, 247, 250, 0.88);
+    --panel: rgba(255,255,255,0.76);
+    --panel-strong: rgba(255,255,255,0.92);
+    --hairline: rgba(24, 33, 45, 0.10);
+    --text: #18212f;
+    --muted: #667085;
+    --faint: #8b95a3;
+    --blue: #3b82f6;
+    --teal: #14b8a6;
+    --green: #22c55e;
+    --orange: #f59e0b;
+    --pink: #ec4899;
+    --purple: #8b5cf6;
+    --shadow: 0 28px 90px rgba(41, 55, 80, 0.18);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1440px; height: 900px; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+    color: var(--text);
+    background:
+      linear-gradient(145deg, var(--desktop-a), var(--desktop-b));
+  }
+
+  .frame {
+    width: 1440px;
+    height: 900px;
+    padding: 32px 38px;
+  }
+
+  .window {
+    position: relative;
+    width: 1364px;
+    height: 836px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 190px 1fr 256px;
+    background: var(--window);
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .traffic {
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    display: flex;
+    gap: 8px;
+    z-index: 5;
+  }
+  .traffic span {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    display: block;
+  }
+  .traffic span:nth-child(1) { background: #ff5f57; }
+  .traffic span:nth-child(2) { background: #febc2e; }
+  .traffic span:nth-child(3) { background: #28c840; }
+
+  aside {
+    padding: 56px 12px 16px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--hairline);
+  }
+
+  .brand {
+    padding: 0 8px 14px;
+  }
+  .brand h1 {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.15;
+    font-weight: 720;
+  }
+  .brand p {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .nav-section {
+    margin-top: 12px;
+  }
+  .section-title {
+    padding: 0 9px 7px;
+    font-size: 11px;
+    color: var(--faint);
+    font-weight: 650;
+  }
+  .nav-row {
+    height: 32px;
+    border-radius: 8px;
+    display: grid;
+    grid-template-columns: 13px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 0 9px;
+    margin: 2px 0;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 560;
+  }
+  .nav-row.active {
+    color: var(--text);
+    background: rgba(20, 184, 166, 0.14);
+  }
+  .nav-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 99px;
+    background: var(--hairline);
+  }
+  .nav-row.active .nav-dot { background: var(--teal); box-shadow: 0 0 0 4px rgba(20,184,166,0.15); }
+  .nav-count {
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  .sidebar-card {
+    margin: 14px 4px 0;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    padding: 10px;
+    background: var(--panel);
+  }
+  .sidebar-card strong {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 5px;
+  }
+  .sidebar-card p { display: none; }
+
+  main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  header {
+    height: 78px;
+    padding: 14px 24px 12px;
+    border-bottom: 1px solid var(--hairline);
+    display: grid;
+    grid-template-columns: 1fr 420px;
+    gap: 16px;
+    align-items: center;
+    background: rgba(255,255,255,0.48);
+  }
+  .headline h2 {
+    margin: 0;
+    font-size: 26px;
+    line-height: 1.1;
+    font-weight: 760;
+  }
+  .headline p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .search {
+    height: 44px;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    background: var(--panel-strong);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    color: var(--muted);
+    font-size: 14px;
+    box-shadow: 0 8px 22px rgba(31, 41, 55, 0.06);
+  }
+  .search .spark {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    color: white;
+    font-weight: 780;
+    background: linear-gradient(135deg, var(--teal), var(--blue));
+  }
+  .search .key {
+    margin-left: auto;
+    color: var(--faint);
+    font-size: 12px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 3px 7px;
+  }
+
+  .content {
+    padding: 14px 24px 22px;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .recommend-strip {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .recommend {
+    height: 58px;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    background: var(--panel);
+    padding: 9px 10px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .recommend strong {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 0;
+  }
+  .recommend p {
+    display: none;
+  }
+  .mini-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    color: white;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--teal), var(--green));
+    flex: 0 0 auto;
+  }
+
+  .grid-head {
+    height: 30px;
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .grid-head h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 720;
+  }
+  .grid-head span {
+    margin-left: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .segmented {
+    margin-left: auto;
+    display: flex;
+    padding: 3px;
+    border-radius: 8px;
+    background: rgba(24,33,45,0.06);
+  }
+  .segmented span {
+    margin: 0;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .segmented span:first-child {
+    background: var(--panel-strong);
+    color: var(--text);
+  }
+
+  .app-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 18px 16px;
+  }
+  .app-tile {
+    position: relative;
+    height: 164px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px 8px 12px;
+    font: inherit;
+    color: var(--text);
+    box-shadow: none;
+  }
+  .app-tile.recommended {
+    background: rgba(20,184,166,0.075);
+    border-color: rgba(20,184,166,0.18);
+  }
+  .ai-corner {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    height: 20px;
+    min-width: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    color: #0f766e;
+    background: rgba(20,184,166,0.13);
+    font-size: 10px;
+    font-weight: 760;
+  }
+  .app-icon,
+  .fallback-icon {
+    width: 76px;
+    height: 76px;
+    border-radius: 18px;
+    object-fit: contain;
+    margin-bottom: 10px;
+    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.12));
+  }
+  .fallback-icon {
+    display: grid;
+    place-items: center;
+    color: var(--ink);
+    background: linear-gradient(135deg, var(--start), var(--end));
+    font-weight: 820;
+    font-size: 27px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+  }
+  .app-name {
+    font-size: 15px;
+    font-weight: 680;
+    line-height: 20px;
+  }
+  .tag-row {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ai-pill {
+    font-size: 10px;
+    font-weight: 680;
+    color: #0f766e;
+    background: rgba(20,184,166,0.12);
+    border: 1px solid rgba(20,184,166,0.18);
+    border-radius: 999px;
+    padding: 3px 7px;
+  }
+  .confidence {
+    color: var(--faint);
+    font-size: 10px;
+  }
+
+  .assistant {
+    padding: 56px 16px 16px;
+    background: rgba(248,250,252,0.82);
+    border-left: 1px solid var(--hairline);
+    display: flex;
+    flex-direction: column;
+  }
+  .assistant h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 740;
+  }
+  .assistant .sub { display: none; }
+  .ai-status {
+    height: 68px;
+    border-radius: 8px;
+    padding: 11px;
+    background: linear-gradient(135deg, rgba(20,184,166,0.18), rgba(59,130,246,0.12));
+    border: 1px solid rgba(20,184,166,0.25);
+    display: grid;
+    grid-template-columns: 38px 1fr;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0 12px;
+  }
+  .ai-mark {
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    color: white;
+    font-weight: 850;
+    background: linear-gradient(135deg, var(--teal), var(--blue));
+  }
+  .ai-status strong {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .ai-status p {
+    margin: 0;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
+
+  .insights {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .insight {
+    border-top: 1px solid var(--hairline);
+    padding: 10px 0 1px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: start;
+  }
+  .insight strong {
+    font-size: 13px;
+  }
+  .insight > span {
+    font-size: 12px;
+    font-weight: 760;
+    border-radius: 999px;
+    padding: 4px 8px;
+  }
+  .insight.teal > span { color: #0f766e; background: rgba(20,184,166,0.14); }
+  .insight.blue > span { color: #2563eb; background: rgba(59,130,246,0.14); }
+  .insight.orange > span { color: #b45309; background: rgba(245,158,11,0.15); }
+  .insight.pink > span { color: #be185d; background: rgba(236,72,153,0.14); }
+
+  .workflow {
+    margin-top: 14px;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    background: var(--panel);
+    padding: 10px;
+  }
+  .workflow strong {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 9px;
+  }
+  .flow-line {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+  }
+  .flow-line span {
+    min-width: 0;
+    text-align: center;
+    border-radius: 7px;
+    padding: 8px 4px;
+    font-size: 11px;
+    color: var(--text);
+    background: rgba(24,33,45,0.055);
+  }
+  .safe-note {
+    margin-top: auto;
+    border-top: 1px solid var(--hairline);
+    padding-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .safe-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 99px;
+    background: var(--green);
+    box-shadow: 0 0 0 4px rgba(34,197,94,0.14);
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <section class="window">
+      <div class="traffic"><span></span><span></span><span></span></div>
+
+      <aside>
+        <div class="brand">
+          <h1>App Dock</h1>
+          <p>AI 原生的 macOS 应用启动器</p>
+        </div>
+
+        <div class="nav-section">
+          <div class="section-title">智能入口</div>
+
+    <div class="nav-row active">
+      <span class="nav-dot"></span>
+      <span>AI 推荐</span>
+      <span class="nav-count">12</span>
+    </div>
+
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>最近使用</span>
+      <span class="nav-count">8</span>
+    </div>
+
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>自动整理新应用</span>
+      <span class="nav-count">3</span>
+    </div>
+
+        </div>
+
+        <div class="nav-section">
+          <div class="section-title">AI 分类</div>
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>开发工具</span>
+      <span class="nav-count">24</span>
+    </div>
+
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>设计创作</span>
+      <span class="nav-count">11</span>
+    </div>
+
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>沟通协作</span>
+      <span class="nav-count">9</span>
+    </div>
+
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>办公效率</span>
+      <span class="nav-count">18</span>
+    </div>
+
+
+    <div class="nav-row ">
+      <span class="nav-dot"></span>
+      <span>全部应用</span>
+      <span class="nav-count">128</span>
+    </div>
+
+        </div>
+
+        <div class="sidebar-card">
+          <strong>自然语言搜索</strong>
+          <p>试试 “打开写代码的工具” 或 “最近用过的设计软件”。</p>
+        </div>
+      </aside>
+
+      <main>
+        <header>
+          <div class="headline">
+            <h2>App Dock</h2>
+            <p>一键打开应用，AI 帮你智能分类、自然语言搜索和推荐打开。</p>
+          </div>
+          <div class="search">
+            <span class="spark">AI</span>
+            <span>AI 搜索应用、类别或任务</span>
+            <span class="key">⌘ K</span>
+          </div>
+        </header>
+
+        <div class="content">
+          <div class="recommend-strip">
+            <div class="recommend">
+              <div class="mini-icon">AI</div>
+              <div>
+                <strong>推荐打开 Cursor</strong>
+                <p>你通常在上午先打开开发工具，接着使用 Safari 查资料。</p>
+              </div>
+            </div>
+            <div class="recommend">
+              <div class="mini-icon" style="background:linear-gradient(135deg,var(--purple),var(--pink))">7</div>
+              <div>
+                <strong>7 个应用已自动归类</strong>
+                <p>新安装应用已加入开发工具和设计创作分组。</p>
+              </div>
+            </div>
+            <div class="recommend">
+              <div class="mini-icon" style="background:linear-gradient(135deg,var(--orange),var(--green))">2</div>
+              <div>
+                <strong>2 个轻量安全提示</strong>
+                <p>仅在详情中展示，不影响启动器主流程。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-head">
+            <h3>AI 推荐应用</h3>
+            <span>按最近使用、任务语义和分类置信度排序</span>
+            <div class="segmented"><span>图标</span><span>列表</span></div>
+          </div>
+          <div class="app-grid">
+
+    <button class="app-tile recommended">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/xcode.png" alt="Xcode icon" />
+      <span class="app-name">Xcode</span>
+      <span class="tag-row">
+        <span class="ai-pill">开发工具</span>
+        <span class="confidence">98%</span>
+      </span>
+    </button>
+
+    <button class="app-tile recommended">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/cursor.png" alt="Cursor icon" />
+      <span class="app-name">Cursor</span>
+      <span class="tag-row">
+        <span class="ai-pill">开发工具</span>
+        <span class="confidence">96%</span>
+      </span>
+    </button>
+
+    <button class="app-tile recommended">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/safari.png" alt="Safari icon" />
+      <span class="app-name">Safari</span>
+      <span class="tag-row">
+        <span class="ai-pill">网络浏览</span>
+        <span class="confidence">94%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/wechat.png" alt="WeChat icon" />
+      <span class="app-name">WeChat</span>
+      <span class="tag-row">
+        <span class="ai-pill">沟通协作</span>
+        <span class="confidence">91%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/notion.png" alt="Notion icon" />
+      <span class="app-name">Notion</span>
+      <span class="tag-row">
+        <span class="ai-pill">办公效率</span>
+        <span class="confidence">93%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+
+    <div class="fallback-icon" style="--start:#f97316;--end:#a855f7;--ink:#ffffff">
+      F
+    </div>
+
+      <span class="app-name">Figma</span>
+      <span class="tag-row">
+        <span class="ai-pill">设计创作</span>
+        <span class="confidence">88%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/docker.png" alt="Docker icon" />
+      <span class="app-name">Docker</span>
+      <span class="tag-row">
+        <span class="ai-pill">开发工具</span>
+        <span class="confidence">95%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/photos.png" alt="Photos icon" />
+      <span class="app-name">Photos</span>
+      <span class="tag-row">
+        <span class="ai-pill">设计创作</span>
+        <span class="confidence">86%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/music.png" alt="Music icon" />
+      <span class="app-name">Music</span>
+      <span class="tag-row">
+        <span class="ai-pill">影音娱乐</span>
+        <span class="confidence">84%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+
+    <div class="fallback-icon" style="--start:#60a5fa;--end:#1d4ed8;--ink:#ffffff">
+      1P
+    </div>
+
+      <span class="app-name">1Password</span>
+      <span class="tag-row">
+        <span class="ai-pill">安全隐私</span>
+        <span class="confidence">90%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/terminal.png" alt="Terminal icon" />
+      <span class="app-name">Terminal</span>
+      <span class="tag-row">
+        <span class="ai-pill">系统工具</span>
+        <span class="confidence">92%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/mail.png" alt="Mail icon" />
+      <span class="app-name">Mail</span>
+      <span class="tag-row">
+        <span class="ai-pill">办公效率</span>
+        <span class="confidence">89%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+      <img class="app-icon" src="assets/icons/calendar.png" alt="Calendar icon" />
+      <span class="app-name">Calendar</span>
+      <span class="tag-row">
+        <span class="ai-pill">办公效率</span>
+        <span class="confidence">87%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+
+    <div class="fallback-icon" style="--start:#38bdf8;--end:#2563eb;--ink:#ffffff">
+      Z
+    </div>
+
+      <span class="app-name">Zoom</span>
+      <span class="tag-row">
+        <span class="ai-pill">沟通协作</span>
+        <span class="confidence">86%</span>
+      </span>
+    </button>
+
+    <button class="app-tile ">
+      <span class="ai-corner">AI</span>
+
+    <div class="fallback-icon" style="--start:#fb7185;--end:#ef4444;--ink:#ffffff">
+      R
+    </div>
+
+      <span class="app-name">Raycast</span>
+      <span class="tag-row">
+        <span class="ai-pill">系统工具</span>
+        <span class="confidence">91%</span>
+      </span>
+    </button>
+
+          </div>
+        </div>
+      </main>
+
+      <section class="assistant">
+        <h3>AI 助手</h3>
+        <p class="sub">持续学习你的应用打开习惯，自动把本机应用整理成可搜索、可启动的智能 Dock。</p>
+        <div class="ai-status">
+          <div class="ai-mark">✦</div>
+          <div>
+            <strong>智能整理完成</strong>
+            <p>128 个应用已分类，42 个应用带有 AI 标签。</p>
+          </div>
+        </div>
+
+        <div class="insights">
+
+    <div class="insight teal">
+      <div>
+        <strong>推荐打开</strong>
+      </div>
+      <span>96%</span>
+    </div>
+
+
+    <div class="insight blue">
+      <div>
+        <strong>新安装应用已分类</strong>
+      </div>
+      <span>3 新</span>
+    </div>
+
+
+    <div class="insight orange">
+      <div>
+        <strong>高频工作流</strong>
+      </div>
+      <span>上午</span>
+    </div>
+
+
+    <div class="insight pink">
+      <div>
+        <strong>自然语言命中</strong>
+      </div>
+      <span>AI</span>
+    </div>
+
+        </div>
+
+        <div class="workflow">
+          <strong>今日建议分组</strong>
+          <div class="flow-line">
+            <span>开发</span>
+            <span>设计</span>
+            <span>沟通</span>
+          </div>
+        </div>
+
+        <div class="safe-note">
+          <span class="safe-dot"></span>
+          <span>安全详情已收起为轻量提示，首页保持启动器体验。</span>
+        </div>
+      </section>
+    </section>
+  </div>
+</body>
+</html>

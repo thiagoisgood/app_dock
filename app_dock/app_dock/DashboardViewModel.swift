@@ -6,7 +6,7 @@ import Combine
 final class DashboardViewModel: ObservableObject {
     @Published var apps: [AppRecord] = []
     @Published var searchText: String = ""
-    @Published var groupingMode: ListGroupingMode = .bySource
+    @Published var groupingMode: ListGroupingMode = .byCategory
     @Published var scopeFilter: AppScopeFilter = .all
     @Published var sortOrder: AppSortOrder = .name
     @Published var selectedAppID: AppRecord.ID?
@@ -27,6 +27,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var flavor: AppFlavor = CapabilityPolicy.current.flavor
     @Published var aiCategories: [String: String] = [:]
     @Published var aiCategoryDescriptions: [String: String] = [:]
+    @Published var aiConfidences: [String: Double] = [:]
     @Published var isOrganizing = false
     @Published var aiOrganizationProgress: String = ""
     @Published var aiReport: String = ""
@@ -42,6 +43,8 @@ final class DashboardViewModel: ObservableObject {
     @Published var isUninstallingAppID: AppRecord.ID?
     @Published var uninstallResult: UninstallCleanupResult?
     @Published var showUninstallResult = false
+    @Published var launcherFilter: LauncherFilter = .aiRecommended
+    @Published private(set) var launcherState: LauncherViewState = .empty
 
     private let pipeline = AuditPipeline()
     private let aiRouter = AIProviderRouter()
@@ -82,12 +85,15 @@ final class DashboardViewModel: ObservableObject {
     private var searchCacheOrder: [String] = []
     private var searchIndexVersion = 0
     private let searchCacheLimit = 24
+    private let launcherIconPreloadLimit = 60
     @Published var searchResults: [SearchResult] = []
     @Published var searchLearningStats: SearchLearningStats = SearchLearningStats()
 
     @Published var tokenUsageSummary: TokenUsageSummary = TokenUsageSummary()
     @Published var searchMappings: [SearchMapping] = []
     @Published var isUpdatingMappings = false
+    @Published var isTestingConnection = false
+    @Published var connectionTestResult: ConnectionTestResult?
 
     init() {
         do { apiKey = try APIKeyStore().load() }
@@ -142,7 +148,51 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    func testAIConnection() async {
+        guard !apiKey.isEmpty else {
+            connectionTestResult = .failure(message: "API Key 未配置")
+            return
+        }
+
+        let config = AIProviderConfig(
+            apiKey: apiKey,
+            baseURL: baseURL.isEmpty ? "https://api.openai.com/v1" : baseURL,
+            model: model.isEmpty ? "gpt-4o-mini" : model,
+            temperature: 0.0,
+            maxTokens: 64
+        )
+
+        isTestingConnection = true
+        connectionTestResult = nil
+        defer { isTestingConnection = false }
+
+        let start = Date()
+        do {
+            let adapter = OpenAICompatibleAdapter()
+            let result = try await adapter.complete(
+                systemPrompt: "You are a connectivity test assistant.",
+                userPrompt: "Reply with exactly: OK",
+                config: config
+            )
+            let latency = Date().timeIntervalSince(start)
+            connectionTestResult = .success(latency: latency, model: config.model)
+            if let pt = result.promptTokens, let ct = result.completionTokens {
+                tokenUsageStore.recordUsage(
+                    operation: "connectivity_test",
+                    model: config.model,
+                    promptTokens: pt,
+                    completionTokens: ct
+                )
+            }
+        } catch let error as AIProviderError {
+            connectionTestResult = .failure(message: error.localizedDescription)
+        } catch {
+            connectionTestResult = .failure(message: error.localizedDescription)
+        }
+    }
+
     func bootstrap() async {
+        PerformanceProbe.mark("bootstrap.start")
         isLoading = true
         appTags = tagStore.load()
         searchMappings = searchMappingStore.getMappings()
@@ -152,6 +202,7 @@ final class DashboardViewModel: ObservableObject {
         if let cachedClassification = classificationStore.load() {
             aiCategories = cachedClassification.categories
             aiCategoryDescriptions = cachedClassification.descriptions
+            aiConfidences = cachedClassification.confidences
         }
 
         // 1. Load cache for instant display
@@ -162,6 +213,7 @@ final class DashboardViewModel: ObservableObject {
             findings = buildRiskFindings(for: apps)
             rebuildListSections()
             isLoading = false
+            PerformanceProbe.mark("bootstrap.cacheVisible")
         }
 
         // 2. Full scan in background
@@ -176,6 +228,7 @@ final class DashboardViewModel: ObservableObject {
         // 3. Save fresh data to cache
         cacheStore.save(apps)
         isLoading = false
+        PerformanceProbe.mark("bootstrap.scanVisible")
 
         // 4. AI strategy: only run if no cached results OR API key just changed
         let hasCachedAI = !aiCategories.isEmpty
@@ -308,12 +361,7 @@ final class DashboardViewModel: ObservableObject {
         )
 
         // 更新类别
-        for result in categories {
-            aiCategories[result.appName] = result.category
-            if let bid = result.bundleID, bid != "unknown" {
-                aiCategories[bid] = result.category
-            }
-        }
+        applyClassificationResults(categories)
         // 填充类别描述
         for (_, cat) in aiCategories {
             if aiCategoryDescriptions[cat] == nil {
@@ -327,7 +375,7 @@ final class DashboardViewModel: ObservableObject {
         invalidateSearchCache()
 
         // Save classification results to cache
-        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
+        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions, confidences: aiConfidences)
 
         // 增量更新名称别名
         aiProcessingProgress = "正在更新名称映射..."
@@ -367,12 +415,7 @@ final class DashboardViewModel: ObservableObject {
         )
 
         // 更新类别
-        for result in categories {
-            aiCategories[result.appName] = result.category
-            if let bid = result.bundleID, bid != "unknown" {
-                aiCategories[bid] = result.category
-            }
-        }
+        applyClassificationResults(categories)
         // 填充类别描述（从 CategorySchema 获取）
         let usedCategories = Set(aiCategories.values)
         for cat in usedCategories {
@@ -387,7 +430,7 @@ final class DashboardViewModel: ObservableObject {
         invalidateSearchCache()
 
         // 保存分类结果到持久化存储
-        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
+        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions, confidences: aiConfidences)
 
         tokenUsageSummary = tokenUsageStore.getSummary()
 
@@ -425,22 +468,24 @@ final class DashboardViewModel: ObservableObject {
         aiCategories
     }
 
-    private func buildAIAssistantSummary() -> String {
-        var lines: [String] = []
-        lines.append("📊 应用总览: \(apps.count) 个应用")
-        let bgCount = apps.filter { $0.permissions.backgroundResident }.count
-        lines.append("• 系统: \(systemCount) | App Store: \(appStoreCount) | 第三方: \(thirdPartyCount)")
-        lines.append("• 后台常驻: \(bgCount) | 高风险: \(findings.filter { $0.level == .high }.count)")
-        if !aiCategories.isEmpty {
-            let topCategories = Dictionary(grouping: aiCategories.values) { $0 }
-                .map { ($0.key, $0.value.count) }
-                .sorted { $0.1 > $1.1 }
-                .prefix(3)
-                .map { "\($0.0)(\($0.1))" }
-            lines.append("• AI分类: \(topCategories.joined(separator: ", "))")
+    /// 将分类结果（含置信度）写入 aiCategories / aiConfidences，同时按名称和 bundleID 建索引
+    private func applyClassificationResults(_ results: [ClassificationResult]) {
+        for result in results {
+            aiCategories[result.appName] = result.category
+            aiConfidences[result.appName] = result.confidence
+            if let bid = result.bundleID, bid != "unknown", !bid.isEmpty {
+                aiCategories[bid] = result.category
+                aiConfidences[bid] = result.confidence
+            }
         }
-        lines.append("\n点击此栏查看完整AI报告")
-        return lines.joined(separator: "\n")
+    }
+
+    private func buildAIAssistantSummary() -> String {
+        let bgCount = apps.filter { $0.permissions.backgroundResident }.count
+        let highCount = findings.filter { $0.level == .high }.count
+        let line1 = "📊 应用总览: \(apps.count) 个应用 · 系统 \(systemCount) · App Store \(appStoreCount) · 第三方 \(thirdPartyCount)"
+        let line2 = "后台常驻: \(bgCount) · 高风险: \(highCount) · 点击查看完整审计报告"
+        return "\(line1)\n\(line2)"
     }
 
     func applySearchAndGrouping() {
@@ -449,7 +494,9 @@ final class DashboardViewModel: ObservableObject {
         // 使用 DispatchQueue.main.async 确保在下一个 run loop 周期执行
         // 避免在视图更新周期中修改 @Published 属性
         DispatchQueue.main.async { [weak self] in
-            self?.rebuildListSections()
+            PerformanceProbe.measure("search.apply") {
+                self?.rebuildListSections()
+            }
         }
     }
 
@@ -469,13 +516,18 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        PerformanceProbe.measure("search.preview") {
+            applyFastSearchPreview(for: query)
+        }
         isSearchLoading = true
         searchDebounceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self else { return }
-                self.rebuildListSections()
+                PerformanceProbe.measure("search.full") {
+                    self.rebuildListSections()
+                }
                 self.isSearchLoading = false
             }
         }
@@ -521,12 +573,7 @@ final class DashboardViewModel: ObservableObject {
         )
 
         // 更新类别映射
-        for result in categories {
-            aiCategories[result.appName] = result.category
-            if let bid = result.bundleID, bid != "unknown" {
-                aiCategories[bid] = result.category
-            }
-        }
+        applyClassificationResults(categories)
         invalidateSearchCache()
         // 填充类别描述
         for (_, cat) in aiCategories {
@@ -539,7 +586,7 @@ final class DashboardViewModel: ObservableObject {
         print("[AI] Organization complete: \(categories.count) apps classified into \(Set(categories.map(\.category)).count) categories")
 
         // Save classification results to cache
-        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
+        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions, confidences: aiConfidences)
 
         rebuildListSections()
     }
@@ -803,6 +850,7 @@ final class DashboardViewModel: ObservableObject {
             appTags[appName] = tags
             tagStore.save(appTags)
             invalidateSearchCache()
+            rebuildLauncherState()
         }
     }
 
@@ -810,6 +858,7 @@ final class DashboardViewModel: ObservableObject {
         appTags[appName]?.removeAll { $0 == tag }
         tagStore.save(appTags)
         invalidateSearchCache()
+        rebuildLauncherState()
     }
 
     func resolvedCategory(for app: AppRecord) -> String {
@@ -820,21 +869,32 @@ final class DashboardViewModel: ObservableObject {
 
     func changeCategory(for appName: String, bundleID: String?, to category: String) {
         aiCategories[appName] = category
+        aiConfidences[appName] = 1.0
         if let bid = bundleID, !bid.isEmpty {
             aiCategories[bid] = category
+            aiConfidences[bid] = 1.0
         }
-        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions)
+        classificationStore.save(categories: aiCategories, descriptions: aiCategoryDescriptions, confidences: aiConfidences)
         invalidateSearchCache()
         rebuildListSections()
+    }
+
+    func selectLauncherFilter(_ filter: LauncherFilter) {
+        launcherFilter = filter
+        groupingMode = filter == .recent ? .recentlyUsed : .byCategory
+        scopeFilter = .all
+        applySearchAndGrouping()
     }
 
     func recordAppOpen(_ app: AppRecord) {
         recentUsageStore.recordOpen(appName: app.name)
         invalidateSearchCache()
+        rebuildLauncherState()
     }
 
     func selectApp(_ app: AppRecord) {
         selectedAppID = app.id
+        rebuildLauncherState()
     }
 
     func riskSignals(for app: AppRecord) -> [RiskSignal] {
@@ -887,6 +947,93 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    private func rebuildLauncherState() {
+        var hintsByAppID: [AppRecord.ID: [SearchMatchHint]] = [:]
+        for result in searchResults where hintsByAppID[result.app.id] == nil {
+            hintsByAppID[result.app.id] = result.hints
+        }
+        let state = LauncherViewState.build(
+            apps: apps,
+            displayedApps: displayedApps,
+            filter: launcherFilter,
+            hasActiveSearch: hasActiveSearch,
+            selectedAppID: selectedAppID,
+            aiCategories: aiCategories,
+            aiConfidences: aiConfidences,
+            appTags: appTags,
+            searchHints: hintsByAppID,
+            recentAppNames: recentUsageStore.recentApps(limit: 30),
+            isAIProcessing: isAIProcessing || isOrganizing,
+            workflowPeriod: workflowPeriodLabel(),
+            suggestedGroups: suggestedGroupLabels(),
+            resolveCategory: { [weak self] app in
+                self?.resolvedCategory(for: app) ?? "其他"
+            },
+            riskLevel: { [weak self] app in
+                self?.riskLevel(for: app)
+            },
+            riskScore: { [weak self] app in
+                self?.riskScore(for: app) ?? 0
+            },
+            hasUpdateSuggestion: { [weak self] app in
+                self?.hasUpdateSuggestion(for: app) ?? false
+            }
+        )
+        launcherState = state
+        AppIconCache.shared.preload(
+            paths: state.items.prefix(launcherIconPreloadLimit).map(\.app.path),
+            sizes: [42, 78]
+        )
+    }
+
+    /// 根据最近使用记录推断高频使用时段标签（上午/下午/晚间/深夜），无数据时回退到当前时段
+    private func workflowPeriodLabel() -> String {
+        let records = recentUsageStore.load()
+        var bucketCounts: [Int: Int] = [:]
+        for record in records.values {
+            let hour = Calendar.current.component(.hour, from: record.lastOpenedAt)
+            bucketCounts[hourBucket(for: hour), default: 0] += 1
+        }
+        if let dominant = bucketCounts.max(by: { $0.value < $1.value })?.key {
+            return periodLabel(for: dominant)
+        }
+        let currentHour = Calendar.current.component(.hour, from: Date())
+        return periodLabel(for: hourBucket(for: currentHour))
+    }
+
+    private func hourBucket(for hour: Int) -> Int {
+        switch hour {
+        case 0..<5: return 0    // 深夜
+        case 5..<12: return 1   // 上午
+        case 12..<18: return 2  // 下午
+        default: return 3       // 晚间
+        }
+    }
+
+    private func periodLabel(for bucket: Int) -> String {
+        switch bucket {
+        case 0: return "深夜"
+        case 1: return "上午"
+        case 2: return "下午"
+        default: return "晚间"
+        }
+    }
+
+    /// 今日建议分组：按应用数量取 top 类别（排除「其他」）
+    private func suggestedGroupLabels(limit: Int = 3) -> [String] {
+        var counts: [String: Int] = [:]
+        for app in apps {
+            let category = resolvedCategory(for: app)
+            if category != "其他" {
+                counts[category, default: 0] += 1
+            }
+        }
+        return counts
+            .sorted { $0.value > $1.value }
+            .prefix(limit)
+            .map(\.key)
+    }
+
     private func buildRiskFindings(for apps: [AppRecord]) -> [AppRiskFinding] {
         apps.compactMap { app in
             let signals = riskEngine.evaluate(app: app)
@@ -902,6 +1049,68 @@ final class DashboardViewModel: ObservableObject {
         }
         .prefix(12)
         .map { $0 }
+    }
+
+    private func applyFastSearchPreview(for query: String) {
+        searchStartTime = Date()
+        let normalized = normalizedSearchKey(query)
+        guard !normalized.isEmpty else { return }
+
+        let previewResults = apps.compactMap { app -> SearchResult? in
+            let name = normalizedSearchKey(app.name)
+            let bundleID = normalizedSearchKey(app.bundleID ?? "")
+            let path = normalizedSearchKey(app.path)
+            let category = normalizedSearchKey(resolvedCategory(for: app))
+            let tags = (appTags[app.name] ?? []).map(normalizedSearchKey)
+
+            var score = 0
+            var hintText: String?
+            if name == normalized {
+                score += 120
+                hintText = "名称精确"
+            } else if name.hasPrefix(normalized) {
+                score += 90
+                hintText = "名称前缀"
+            } else if name.contains(normalized) {
+                score += 60
+                hintText = "名称命中"
+            }
+            if category.contains(normalized) {
+                score += 45
+                hintText = hintText ?? "类别命中"
+            }
+            if tags.contains(where: { $0.contains(normalized) }) {
+                score += 40
+                hintText = hintText ?? "标签命中"
+            }
+            if bundleID.contains(normalized) {
+                score += 25
+                hintText = hintText ?? "Bundle 命中"
+            }
+            if path.contains(normalized) {
+                score += 10
+                hintText = hintText ?? "路径命中"
+            }
+
+            guard score > 0 else { return nil }
+            return SearchResult(
+                id: app.id,
+                app: app,
+                hints: [SearchMatchHint(id: "instant", displayText: hintText ?? "即时命中", color: .teal)],
+                score: score
+            )
+        }
+        .sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.app.name.localizedStandardCompare($1.app.name) == .orderedAscending
+        }
+
+        allSearchResults = previewResults
+        searchResults = previewResults
+        lastSearchResults = previewResults.map(\.app)
+        listSections = [AppListSection(title: "即时搜索", apps: lastSearchResults)]
+        syncSelection()
+        rebuildLauncherState()
     }
 
     private func filteredApps() -> [AppRecord] {
@@ -1020,6 +1229,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func rebuildListSections() {
+        defer { rebuildLauncherState() }
+
         appStoreBytes = apps.filter { $0.source == .appStore }.map(\.sizeBytes).reduce(0, +)
         thirdPartyBytes = apps.filter { $0.source == .thirdParty }.map(\.sizeBytes).reduce(0, +)
         systemCount = apps.filter { $0.source == .system }.count

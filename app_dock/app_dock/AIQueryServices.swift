@@ -33,6 +33,8 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         self.session = session ?? Self.defaultSession
         self.defaults = defaults
     }
+    /// 进程内稳定的会话 ID，供兼容网关路由与缓存使用。
+    private static let sessionID = UUID().uuidString
 
     func complete(prompt: String, payload: Data, config: AIProviderConfig) async throws -> AICompletionResult {
         return try await complete(
@@ -64,6 +66,9 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        // OpenCode Go 网关要求携带稳定的会话 ID；其他 OpenAI-compatible 服务会忽略该头
+        request.setValue(Self.sessionID, forHTTPHeaderField: "x-opencode-session")
+        request.setValue("app-dock/1.0", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 120
 
         let userPayload = String(decoding: payload, as: UTF8.self)
@@ -103,8 +108,12 @@ struct OpenAICompatibleAdapter: AIProviderAdapter {
         }
 
         guard let parsed = try? JSONDecoder().decode(OpenAICompatResponse.self, from: data),
-              let content = parsed.choices.first?.message.content,
-              !content.isEmpty else {
+              let message = parsed.choices.first?.message else {
+            throw AIProviderError.decodeFailure
+        }
+        // 推理型模型（如 DeepSeek V4）可能把内容放在 reasoning_content；content 为空时回退
+        let content = message.content.isEmpty ? (message.reasoning_content ?? "") : message.content
+        guard !content.isEmpty else {
             throw AIProviderError.decodeFailure
         }
         return AICompletionResult(
@@ -141,6 +150,7 @@ private struct OpenAICompatResponse: Codable {
         struct Message: Codable {
             let role: String?
             let content: String
+            let reasoning_content: String?
         }
         let message: Message
     }
@@ -369,7 +379,7 @@ struct AINaturalLanguageSearch {
                     return SearchResult(
                         id: app.id,
                         app: app,
-                        hints: [SearchMatchHint(id: "aliasExact", displayText: "精确匹配 (别名)", color: .green)],
+                        hints: [SearchMatchHint(id: "aliasExact", displayText: "别名精确", color: .green)],
                         score: 1000
                     )
                 }
@@ -385,7 +395,7 @@ struct AINaturalLanguageSearch {
                     return SearchResult(
                         id: app.id,
                         app: app,
-                        hints: [SearchMatchHint(id: "aliasBundleExact", displayText: "精确匹配 (中英别名)", color: .green)],
+                        hints: [SearchMatchHint(id: "aliasBundleExact", displayText: "别名精确", color: .green)],
                         score: 1000
                     )
                 }
@@ -398,7 +408,7 @@ struct AINaturalLanguageSearch {
                 return SearchResult(
                     id: app.id,
                     app: app,
-                    hints: [SearchMatchHint(id: "bundleExact", displayText: "精确匹配 (BundleID)", color: .green)],
+                    hints: [SearchMatchHint(id: "bundleExact", displayText: "BundleID精确", color: .green)],
                     score: 1000
                 )
             }
@@ -446,7 +456,7 @@ struct AINaturalLanguageSearch {
             matchesHardIntents($0, intents: intents)
         }
 
-        let hint = SearchMatchHint(id: "category:\(category)", displayText: "匹配类别: \(category)", color: .blue)
+        let hint = SearchMatchHint(id: "category:\(category)", displayText: "类别: \(category)", color: .blue)
         return filtered.map { app in
             SearchResult(id: app.id, app: app, hints: [hint], score: 100)
         }
@@ -524,7 +534,7 @@ struct AINaturalLanguageSearch {
                         score += weights.tagWeight
                         let hintID = "tag:\(tag)"
                         if !hints.contains(where: { $0.id == hintID }) {
-                            hints.append(SearchMatchHint(id: hintID, displayText: "匹配标签: \(tag)", color: .purple))
+                            hints.append(SearchMatchHint(id: hintID, displayText: "标签: \(tag)", color: .purple))
                         }
                     }
                 }
@@ -536,7 +546,7 @@ struct AINaturalLanguageSearch {
             if matchedCategories.contains(resolvedCat) {
                 score += weights.mappingWeight
                 if !hints.contains(where: { $0.id == "category:\(resolvedCat)" }) {
-                    hints.append(SearchMatchHint(id: "category:\(resolvedCat)", displayText: "匹配类别: \(resolvedCat)", color: .blue))
+                    hints.append(SearchMatchHint(id: "category:\(resolvedCat)", displayText: "类别: \(resolvedCat)", color: .blue))
                 }
             }
 
@@ -545,7 +555,7 @@ struct AINaturalLanguageSearch {
                 if mapping.appNames.contains(where: { normalize($0) == normalize(app.name) }) {
                     score += weights.mappingWeight * 0.6
                     if !hints.contains(where: { $0.id.starts(with: "mapping:") }) {
-                        hints.append(SearchMatchHint(id: "mapping:\(mapping.category)", displayText: "语义映射: \(mapping.category)", color: .teal))
+                        hints.append(SearchMatchHint(id: "mapping:\(mapping.category)", displayText: "映射: \(mapping.category)", color: .teal))
                     }
                 }
                 if let bid = app.bundleID {
@@ -1445,11 +1455,11 @@ private struct LocalFieldMatch {
 
     var hintText: String {
         switch level {
-        case .exact: return "精确命中: \(field.kind.hintLabel)"
-        case .prefix: return "前缀命中: \(field.kind.hintLabel)"
-        case .token: return "关键词命中: \(field.kind.hintLabel)"
-        case .fuzzy: return "模糊命中: \(field.kind.hintLabel)"
-        case .semantic: return "语义补充"
+        case .exact: return "精确: \(field.kind.hintLabel)"
+        case .prefix: return "前缀: \(field.kind.hintLabel)"
+        case .token: return "匹配: \(field.kind.hintLabel)"
+        case .fuzzy: return "模糊: \(field.kind.hintLabel)"
+        case .semantic: return "语义匹配"
         }
     }
 }

@@ -2,35 +2,107 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+enum DashboardViewMode: String, CaseIterable, Identifiable {
+    case audit = "列表"
+    case launcher = "启动台"
+
+    var id: String { rawValue }
+    var systemImage: String {
+        switch self {
+        case .audit: return "list.bullet.rectangle"
+        case .launcher: return "square.grid.3x3"
+        }
+    }
+}
+
+enum LauncherLayoutMode: String, CaseIterable, Identifiable {
+    case grid = "图标"
+    case list = "列表"
+
+    var id: String { rawValue }
+    var systemImage: String {
+        switch self {
+        case .grid: return "square.grid.2x2"
+        case .list: return "list.bullet"
+        }
+    }
+}
+
 struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @AppStorage("dashboardViewMode") private var viewMode: DashboardViewMode = .audit
     @State private var previousSearchText = ""
+    @State private var launchingAppID: AppRecord.ID?
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
-        NavigationSplitView {
-            AuditSidebar(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-        } content: {
-            AuditListPane(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 600, ideal: 720, max: 980)
-        } detail: {
-            AppInspectorPane(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 480)
+        Group {
+            if viewMode == .audit {
+                NavigationSplitView {
+                    AuditSidebar(viewModel: viewModel)
+                        .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
+                } content: {
+                    AuditListPane(viewModel: viewModel)
+                        .navigationSplitViewColumnWidth(min: 680, ideal: 820, max: 1200)
+                } detail: {
+                    AppInspectorPane(viewModel: viewModel)
+                        .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 480)
+                }
+            } else {
+                NavigationSplitView {
+                    LauncherSidebar(
+                        viewModel: viewModel,
+                        state: viewModel.launcherState
+                    )
+                    .navigationSplitViewColumnWidth(min: 184, ideal: 202, max: 226)
+                } content: {
+                    LauncherMainPane(
+                        viewModel: viewModel,
+                        state: viewModel.launcherState,
+                        launchingAppID: launchingAppID,
+                        searchFocused: $searchFocused,
+                        launch: launch
+                    )
+                    .navigationSplitViewColumnWidth(min: 720, ideal: 860, max: 1100)
+                } detail: {
+                    AIAssistantPane(
+                        viewModel: viewModel,
+                        state: viewModel.launcherState,
+                        launch: launch
+                    )
+                    .navigationSplitViewColumnWidth(min: 250, ideal: 286, max: 340)
+                }
+            }
         }
-        .navigationTitle("AppDock Audit")
-        .searchable(
-            text: $viewModel.searchText,
-            placement: .toolbar,
-            prompt: "搜索应用名、标签、Bundle ID 或自然语言"
-        )
+        .navigationTitle("App Dock")
         .onChange(of: viewModel.searchText) { _ in
             handleSearchTextChanged()
         }
         .onAppear {
             previousSearchText = viewModel.searchText
+            PerformanceProbe.mark("launcher.viewAppeared")
         }
         .toolbar {
-            AuditToolbar(viewModel: viewModel)
+            ToolbarItem(placement: .principal) {
+                Picker("视图模式", selection: $viewMode) {
+                    ForEach(DashboardViewMode.allCases) { mode in
+                        Label(mode.rawValue, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+            }
+            LauncherToolbar(viewModel: viewModel)
+        }
+        .overlay(alignment: .topLeading) {
+            Button("聚焦搜索") {
+                searchFocused = true
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityHidden(true)
         }
         .background(.background)
         .sheet(isPresented: $viewModel.showSettings) {
@@ -57,20 +129,42 @@ struct DashboardView: View {
         previousSearchText = viewModel.searchText
         viewModel.scheduleSearchAndGrouping()
     }
+
+    private func launch(_ app: AppRecord) {
+        let started = PerformanceProbe.start("launcher.clickToOpen")
+        let trimmedSearch = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resultIndex = trimmedSearch.isEmpty ? nil : viewModel.searchResults.firstIndex { $0.app.id == app.id }
+        launchingAppID = app.id
+        viewModel.selectApp(app)
+        openApp(app)
+        PerformanceProbe.end("launcher.clickToOpen", from: started)
+
+        Task { @MainActor in
+            if let resultIndex {
+                viewModel.recordSearchClick(app: app, resultIndex: resultIndex)
+            }
+            viewModel.recordAppOpen(app)
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            if launchingAppID == app.id {
+                launchingAppID = nil
+            }
+        }
+    }
+
 }
 
 // MARK: - Toolbar
 
-private struct AuditToolbar: ToolbarContent {
+private struct LauncherToolbar: ToolbarContent {
     @ObservedObject var viewModel: DashboardViewModel
 
     var body: some ToolbarContent {
         ToolbarItemGroup {
-            Label(viewModel.isLoading ? "正在扫描 macOS 应用..." : viewModel.healthSummary, systemImage: viewModel.isLoading ? "arrow.triangle.2.circlepath" : "checkmark.shield")
+            Label(viewModel.isLoading ? "扫描应用..." : "\(viewModel.apps.count) 个应用", systemImage: viewModel.isLoading ? "arrow.triangle.2.circlepath" : "square.grid.3x3")
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .help(viewModel.healthSummary)
+                .help("已发现 \(viewModel.apps.count) 个 macOS 应用")
 
             CapabilityPill(flavor: viewModel.flavor)
 
@@ -95,7 +189,7 @@ private struct AuditToolbar: ToolbarContent {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("重新扫描应用")
+                .help("重新扫描应用")
 
             if !viewModel.apiKey.isEmpty {
                 Button {
@@ -119,12 +213,12 @@ private struct AuditToolbar: ToolbarContent {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Label("报告", systemImage: "doc.text.magnifyingglass")
+                        Label("安全详情", systemImage: "shield.lefthalf.filled")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("生成 AI 审计报告")
+                .help("生成 AI 安全详情")
             }
 
             Button {
@@ -136,6 +230,802 @@ private struct AuditToolbar: ToolbarContent {
             .controlSize(.small)
             .help("打开设置")
         }
+    }
+}
+
+private struct LauncherSidebar: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let state: LauncherViewState
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("App Dock")
+                        .font(.title3.weight(.semibold))
+                    Text("AI 原生的 macOS 应用启动器")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+            }
+
+            Section("智能入口") {
+                ForEach(state.smartRows) { row in
+                    launcherRow(row)
+                }
+            }
+
+            Section("AI 分类") {
+                ForEach(state.categoryRows) { row in
+                    launcherRow(row)
+                }
+            }
+
+            Section {
+                Label("自然语言搜索", systemImage: "text.magnifyingglass")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+    }
+
+    @ViewBuilder
+    private func launcherRow(_ row: LauncherSidebarRow) -> some View {
+        Button {
+            viewModel.selectLauncherFilter(row.filter)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: row.systemImage)
+                    .frame(width: 17)
+                    .foregroundStyle(state.filter == row.filter ? Color.accentColor : .secondary)
+                Text(row.filter.title)
+                    .lineLimit(1)
+                Spacer()
+                Text("\(row.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(state.filter == row.filter ? Color.accentColor.opacity(0.16) : Color.clear)
+    }
+}
+
+// MARK: - Launcher Main
+
+private struct LauncherMainPane: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let state: LauncherViewState
+    let launchingAppID: AppRecord.ID?
+    let searchFocused: FocusState<Bool>.Binding
+    let launch: (AppRecord) -> Void
+    @State private var layoutMode: LauncherLayoutMode = .grid
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LauncherHeader(
+                viewModel: viewModel,
+                title: state.title,
+                subtitle: state.subtitle,
+                searchFocused: searchFocused,
+                openFirstResult: openFirstResult
+            )
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    LauncherSummaryStrip(items: state.summaryItems)
+
+                    HStack(spacing: 8) {
+                        Text(state.hasActiveSearch ? "AI 搜索命中" : "应用")
+                            .font(.headline)
+                        Text("\(state.items.count)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        Spacer()
+                        if viewModel.isSearchLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Picker("布局", selection: $layoutMode) {
+                            ForEach(LauncherLayoutMode.allCases) { mode in
+                                Label(mode.rawValue, systemImage: mode.systemImage)
+                                    .tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+
+                    if state.items.isEmpty {
+                        LauncherEmptyState()
+                    } else {
+                        switch layoutMode {
+                        case .grid:
+                            LauncherAppGrid(
+                                viewModel: viewModel,
+                                items: state.items,
+                                launchingAppID: launchingAppID,
+                                launch: launch
+                            )
+                        case .list:
+                            LauncherAppList(
+                                viewModel: viewModel,
+                                items: state.items,
+                                launchingAppID: launchingAppID,
+                                launch: launch
+                            )
+                        }
+                    }
+                }
+                .padding(24)
+            }
+        }
+        .background(.background)
+    }
+
+    private func openFirstResult() {
+        guard let first = state.items.first?.app else { return }
+        launch(first)
+    }
+}
+
+private struct LauncherHeader: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let title: String
+    let subtitle: String
+    let searchFocused: FocusState<Bool>.Binding
+    let openFirstResult: () -> Void
+
+    var body: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("App Dock")
+                    .font(.title.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            HStack(spacing: 9) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(.teal.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                TextField("AI 搜索应用、类别或任务", text: $viewModel.searchText)
+                    .textFieldStyle(.plain)
+                    .focused(searchFocused)
+                    .onSubmit(openFirstResult)
+                Text("⌘K")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            }
+            .padding(.horizontal, 12)
+            .frame(width: 420, height: 44)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.quaternary, lineWidth: 0.5)
+            }
+            .help("输入后按 Return 打开首个结果")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+}
+
+private struct LauncherSummaryStrip: View {
+    let items: [LauncherStatItem]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(items) { item in
+                LauncherStatCard(item: item)
+            }
+        }
+    }
+}
+
+private struct LauncherStatCard: View {
+    let item: LauncherStatItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: item.systemImage)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(item.tint.color.gradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(item.value)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                if let detail = item.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 70)
+        .modernPanel(material: .thinMaterial)
+    }
+}
+
+private struct LauncherAppGrid: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let items: [LauncherAppItem]
+    let launchingAppID: AppRecord.ID?
+    let launch: (AppRecord) -> Void
+    @State private var tagEditorItem: LauncherAppItem?
+    @State private var categoryPickerItem: LauncherAppItem?
+    @FocusState private var focusedAppID: AppRecord.ID?
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 116, maximum: 138), spacing: 22, alignment: .top)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
+            ForEach(items) { item in
+                LauncherAppTile(
+                    item: item,
+                    isLaunching: launchingAppID == item.id,
+                    launch: { launch(item.app) },
+                    revealInFinder: {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.app.path)])
+                    },
+                    select: {
+                        viewModel.selectApp(item.app)
+                    },
+                    editTags: {
+                        tagEditorItem = item
+                    },
+                    changeCategory: {
+                        categoryPickerItem = item
+                    }
+                )
+                .focused($focusedAppID, equals: item.id)
+            }
+        }
+        .padding(.bottom, 24)
+        .onAppear {
+            focusedAppID = focusedAppID ?? items.first?.id
+        }
+        .onChange(of: items.map(\.id)) { ids in
+            if let focusedAppID, ids.contains(focusedAppID) {
+                return
+            }
+            focusedAppID = ids.first
+        }
+        .onMoveCommand(perform: moveFocus)
+        .popover(item: $tagEditorItem) { item in
+            TagEditorView(appName: item.app.name, tags: item.tags, viewModel: viewModel)
+        }
+        .popover(item: $categoryPickerItem) { item in
+            CategoryPickerView(
+                appName: item.app.name,
+                bundleID: item.app.bundleID,
+                currentCategory: item.category,
+                viewModel: viewModel
+            )
+        }
+    }
+
+    private func moveFocus(_ direction: MoveCommandDirection) {
+        guard !items.isEmpty else { return }
+        let currentIndex = focusedAppID.flatMap { id in
+            items.firstIndex { $0.id == id }
+        } ?? 0
+        let columnsPerRow = min(max(items.count, 1), 5)
+        let nextIndex: Int
+        switch direction {
+        case .left:
+            nextIndex = max(0, currentIndex - 1)
+        case .right:
+            nextIndex = min(items.count - 1, currentIndex + 1)
+        case .up:
+            nextIndex = max(0, currentIndex - columnsPerRow)
+        case .down:
+            nextIndex = min(items.count - 1, currentIndex + columnsPerRow)
+        @unknown default:
+            nextIndex = currentIndex
+        }
+        focusedAppID = items[nextIndex].id
+    }
+}
+
+private struct LauncherAppTile: View {
+    let item: LauncherAppItem
+    let isLaunching: Bool
+    let launch: () -> Void
+    let revealInFinder: () -> Void
+    let select: () -> Void
+    let editTags: () -> Void
+    let changeCategory: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            launch()
+        } label: {
+            VStack(spacing: 9) {
+                ZStack(alignment: .topTrailing) {
+                    AppIconView(path: item.app.path, size: 78)
+                        .shadow(color: .black.opacity(0.16), radius: 12, y: 8)
+                        .opacity(isLaunching ? 0.58 : 1)
+                    if isLaunching {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 28, height: 28)
+                            .background(.regularMaterial, in: Circle())
+                            .offset(x: 10, y: -8)
+                    } else if !item.cornerBadgeText.isEmpty {
+                        Text(item.cornerBadgeText)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(item.statusTint.color)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.thinMaterial, in: Capsule())
+                            .offset(x: 10, y: -6)
+                    }
+                }
+
+                Text(item.app.name)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)
+
+                HStack(spacing: 5) {
+                    MiniCategoryBadge(text: item.displayHint)
+                    Text(item.confidenceLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 14)
+            .frame(width: 124, height: 142)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .background(tileBackground)
+        .scaleEffect(isLaunching ? 0.97 : 1)
+        .animation(.snappy(duration: 0.16), value: isLaunching)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .contextMenu {
+            Button("打开应用", action: launch)
+            Button("在 Finder 中显示", action: revealInFinder)
+            Button("设为详情焦点", action: select)
+            Divider()
+            Button("编辑标签...", action: editTags)
+            Button("修改类别...", action: changeCategory)
+        }
+        .help("单击打开 \(item.app.name)")
+    }
+
+    @ViewBuilder
+    private var tileBackground: some View {
+        let cornerRadius: CGFloat = 14
+        if isLaunching || item.isSelected || isHovering || item.isRecommended {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(tileFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(tileStroke, lineWidth: item.isSelected ? 1 : 0.5)
+                }
+        }
+    }
+
+    private var tileFill: Color {
+        if isLaunching { return Color.accentColor.opacity(0.16) }
+        if item.isSelected { return Color.accentColor.opacity(0.12) }
+        if isHovering { return Color.primary.opacity(0.06) }
+        return Color.teal.opacity(0.08)
+    }
+
+    private var tileStroke: Color {
+        if isLaunching || item.isSelected { return Color.accentColor.opacity(0.32) }
+        if isHovering { return Color.primary.opacity(0.14) }
+        return Color.teal.opacity(0.18)
+    }
+}
+
+private struct LauncherAppList: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let items: [LauncherAppItem]
+    let launchingAppID: AppRecord.ID?
+    let launch: (AppRecord) -> Void
+    @State private var tagEditorItem: LauncherAppItem?
+    @State private var categoryPickerItem: LauncherAppItem?
+
+    var body: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(items) { item in
+                LauncherAppListRow(
+                    item: item,
+                    isLaunching: launchingAppID == item.id,
+                    launch: { launch(item.app) },
+                    revealInFinder: {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.app.path)])
+                    },
+                    select: {
+                        viewModel.selectApp(item.app)
+                    },
+                    editTags: {
+                        tagEditorItem = item
+                    },
+                    changeCategory: {
+                        categoryPickerItem = item
+                    }
+                )
+                Divider()
+            }
+        }
+        .modernPanel(material: .thinMaterial)
+        .padding(.bottom, 24)
+        .popover(item: $tagEditorItem) { item in
+            TagEditorView(appName: item.app.name, tags: item.tags, viewModel: viewModel)
+        }
+        .popover(item: $categoryPickerItem) { item in
+            CategoryPickerView(
+                appName: item.app.name,
+                bundleID: item.app.bundleID,
+                currentCategory: item.category,
+                viewModel: viewModel
+            )
+        }
+    }
+}
+
+private struct LauncherAppListRow: View {
+    let item: LauncherAppItem
+    let isLaunching: Bool
+    let launch: () -> Void
+    let revealInFinder: () -> Void
+    let select: () -> Void
+    let editTags: () -> Void
+    let changeCategory: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: launch) {
+            HStack(spacing: 12) {
+                AppIconView(path: item.app.path, size: 40)
+                    .opacity(isLaunching ? 0.58 : 1)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(item.app.name)
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(1)
+                        if !item.statusLabel.isEmpty {
+                            Text(item.statusLabel)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(item.statusTint.color)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(item.statusTint.color.opacity(0.12), in: Capsule())
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        MiniCategoryBadge(text: item.displayHint)
+                        if !item.confidenceLabel.isEmpty {
+                            Text(item.confidenceLabel)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+
+                Spacer()
+
+                if isLaunching {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(isHovering || item.isSelected ? Color.primary.opacity(0.05) : Color.clear)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .contextMenu {
+            Button("打开应用", action: launch)
+            Button("在 Finder 中显示", action: revealInFinder)
+            Button("设为详情焦点", action: select)
+            Divider()
+            Button("编辑标签...", action: editTags)
+            Button("修改类别...", action: changeCategory)
+        }
+        .help("单击打开 \(item.app.name)")
+    }
+}
+
+private struct MiniCategoryBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(shortText)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.teal)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.teal.opacity(0.12), in: Capsule())
+    }
+
+    private var shortText: String {
+        if text.count <= 6 { return text }
+        return String(text.prefix(6))
+    }
+}
+
+private struct LauncherEmptyState: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "square.grid.3x3")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("没有匹配的应用")
+                .font(.headline)
+            Text("换一个搜索词或切回全部应用。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 260)
+        .modernPanel(material: .thinMaterial)
+    }
+}
+
+// MARK: - AI Assistant
+
+private struct AIAssistantPane: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let state: LauncherViewState
+    let launch: (AppRecord) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("AI 助手")
+                    .font(.title3.weight(.semibold))
+
+                AIStatusCard(isProcessing: viewModel.isAIProcessing || viewModel.isOrganizing, state: state.aiStatus)
+
+                VStack(spacing: 0) {
+                    AIInsightRow(
+                        title: "推荐打开",
+                        detail: "\(state.aiStatus.recommendedName) 是当前首选应用。",
+                        value: state.aiStatus.recommendedConfidenceLabel,
+                        tint: .teal
+                    )
+                    AIInsightRow(
+                        title: "新安装应用已分类",
+                        detail: "最近新安装的应用已自动加入对应分组。",
+                        value: state.aiStatus.organizedValue,
+                        tint: .blue
+                    )
+                    AIInsightRow(
+                        title: "高频工作流",
+                        detail: "你在该时段打开应用的频率最高。",
+                        value: state.aiStatus.workflowValue,
+                        tint: .orange
+                    )
+                    AIInsightRow(
+                        title: "自然语言命中",
+                        detail: "“写代码”“会议”等描述会映射到对应应用。",
+                        value: state.aiStatus.naturalLanguageValue,
+                        tint: .pink
+                    )
+                }
+
+                SuggestedGroupCard(groups: state.suggestedGroups)
+
+                if let app = viewModel.selectedApp {
+                    SelectedAppSummaryCard(app: app, viewModel: viewModel, launch: launch)
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 8, height: 8)
+                    Text("安全详情已收起为轻量提示")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 8)
+            }
+            .padding(16)
+        }
+        .background(.background)
+    }
+}
+
+private struct AIStatusCard: View {
+    let isProcessing: Bool
+    let state: LauncherAIStatusState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isProcessing {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 38, height: 38)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            } else {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(.teal.gradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(state.title)
+                    .font(.caption.weight(.semibold))
+                Text(state.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.teal.opacity(0.22), lineWidth: 0.5)
+        }
+    }
+}
+
+private struct AIInsightRow: View {
+    let title: String
+    let detail: String?
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(tint.opacity(0.12), in: Capsule())
+                .lineLimit(1)
+        }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+}
+
+private struct SuggestedGroupCard: View {
+    let groups: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("今日建议分组")
+                .font(.caption.weight(.semibold))
+            if groups.isEmpty {
+                Text("暂无分组建议")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 7) {
+                    ForEach(groups, id: \.self) { title in
+                        group(title)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .modernPanel(material: .thinMaterial)
+    }
+
+    private func group(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+}
+
+private struct SelectedAppSummaryCard: View {
+    let app: AppRecord
+    @ObservedObject var viewModel: DashboardViewModel
+    let launch: (AppRecord) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                AppIconView(path: app.path, size: 42)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.name)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    Text(viewModel.resolvedCategory(for: app))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    launch(app)
+                } label: {
+                    Label("打开", systemImage: "arrow.up.right.square")
+                }
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: app.path)])
+                } label: {
+                    Label("定位", systemImage: "folder")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            HStack(spacing: 6) {
+                RiskBadge(score: viewModel.riskScore(for: app), level: viewModel.riskLevel(for: app))
+                Text(app.source.displayLabel)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(app.source.tint)
+            }
+        }
+        .padding(12)
+        .modernPanel(material: .thinMaterial)
     }
 }
 
@@ -208,6 +1098,7 @@ private struct AuditSidebar: View {
                     Text("\(viewModel.searchLearningStats.totalQueries) 次查询 · \(Int(viewModel.searchLearningStats.clickRate))% 命中")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
         }
@@ -235,11 +1126,13 @@ private struct ScopeRow: View {
                 Text(filter.rawValue)
                     .font(.callout)
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                 Spacer()
                 Text("\(count)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .lineLimit(1)
             }
             .padding(.vertical, 2)
             .contentShape(RoundedRectangle(cornerRadius: 7))
@@ -370,9 +1263,11 @@ private struct MetricTile: View {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Text(value)
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
+                    .lineLimit(1)
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -392,7 +1287,7 @@ private struct StatusBanner: View {
     let active: Bool
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             if active {
                 ProgressView()
                     .controlSize(.small)
@@ -404,14 +1299,17 @@ private struct StatusBanner: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
             if !active {
                 Text("查看报告")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.teal)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .modernPanel(material: .thinMaterial)
     }
@@ -419,19 +1317,19 @@ private struct StatusBanner: View {
 
 private struct AuditTableHeader: View {
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Text("应用")
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
             Text("风险")
-                .frame(width: 72, alignment: .leading)
+                .frame(width: 64, alignment: .leading)
             Text("来源")
-                .frame(width: 78, alignment: .leading)
+                .frame(width: 68, alignment: .leading)
             Text("签名")
-                .frame(width: 92, alignment: .leading)
+                .frame(width: 74, alignment: .leading)
             Text("权限")
-                .frame(width: 86, alignment: .leading)
+                .frame(width: 72, alignment: .leading)
             Text("资源")
-                .frame(width: 90, alignment: .trailing)
+                .frame(width: 70, alignment: .trailing)
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
@@ -457,7 +1355,7 @@ private struct AuditAppRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 HStack(spacing: 10) {
                     AppIconView(path: app.path, size: 34)
                     VStack(alignment: .leading, spacing: 3) {
@@ -465,9 +1363,10 @@ private struct AuditAppRow: View {
                             Text(app.name)
                                 .font(.callout.weight(.medium))
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                             if hasUpdate {
                                 Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.caption)
+                                    .font(.caption2)
                                     .foregroundStyle(.blue)
                                     .help("发现更新建议")
                             }
@@ -477,47 +1376,64 @@ private struct AuditAppRow: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                            ForEach(tags.prefix(2), id: \.self) { tag in
+                                .fixedSize(horizontal: true, vertical: false)
+
+                            if let hint = hints.first {
+                                Text(hint.displayText)
+                                    .font(.system(size: 9.5, weight: .medium))
+                                    .foregroundStyle(hint.color)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
+                                    .background(hint.color.opacity(0.12), in: Capsule())
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+
+                            let maxTags = hints.isEmpty ? 2 : 1
+                            ForEach(tags.prefix(maxTags), id: \.self) { tag in
                                 Text(tag)
-                                    .font(.caption2.weight(.medium))
+                                    .font(.system(size: 9.5, weight: .medium))
                                     .foregroundStyle(.teal)
                                     .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
+                                    .padding(.vertical, 1.5)
                                     .background(Color.teal.opacity(0.10), in: Capsule())
-                            }
-                            ForEach(hints.prefix(1)) { hint in
-                                Text(hint.displayText)
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(hint.color)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
 
                 RiskBadge(score: riskScore, level: riskLevel)
-                    .frame(width: 72, alignment: .leading)
+                    .frame(width: 64, alignment: .leading)
 
                 Text(app.source.displayLabel)
                     .font(.caption)
                     .foregroundStyle(app.source.tint)
-                    .frame(width: 78, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: 68, alignment: .leading)
 
                 Text(app.signature.trustLevel.displayLabel)
                     .font(.caption)
                     .foregroundStyle(app.signature.trustLevel.tint)
-                    .frame(width: 92, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: 74, alignment: .leading)
 
                 PermissionMiniStack(app: app)
-                    .frame(width: 86, alignment: .leading)
+                    .frame(width: 72, alignment: .leading)
 
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(String(format: "%.1f", app.metrics.cpuPercent))%")
+                        .lineLimit(1)
                     Text("\(Int(app.metrics.memoryMB)) MB")
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 .font(.caption.monospacedDigit())
-                .frame(width: 90, alignment: .trailing)
+                .frame(width: 70, alignment: .trailing)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
@@ -556,18 +1472,22 @@ private struct RiskBadge: View {
     let level: AuditRiskLevel?
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             Circle()
                 .fill((level ?? .low).tint)
                 .frame(width: 7, height: 7)
             Text(level?.displayLabel ?? "低")
                 .font(.caption.weight(.semibold))
+                .lineLimit(1)
             Text("\(score)")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
         .background((level ?? .low).tint.opacity(0.10), in: Capsule())
         .overlay {
             Capsule()
@@ -580,7 +1500,7 @@ private struct PermissionMiniStack: View {
     let app: AppRecord
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             ForEach(Array(app.permissions.requested.prefix(3)), id: \.self) { permission in
                 Image(systemName: permission.systemImage)
                     .font(.caption)
@@ -598,6 +1518,8 @@ private struct PermissionMiniStack: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -1002,7 +1924,7 @@ private struct AppIconView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
         .task(id: path) {
-            self.icon = AppIconCache.shared.icon(for: path)
+            self.icon = await AppIconCache.shared.icon(for: path, size: size)
         }
     }
 }
@@ -1314,8 +2236,45 @@ private struct AIProviderSettings: View {
             if let error = viewModel.credentialError {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
+
+            Section {
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await viewModel.testAIConnection() }
+                    } label: {
+                        if viewModel.isTestingConnection {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("测试连接", systemImage: "bolt.horizontal.circle")
+                        }
+                    }
+                    .disabled(viewModel.isTestingConnection || viewModel.apiKey.isEmpty)
+
+                    connectionResultView
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var connectionResultView: some View {
+        if let result = viewModel.connectionTestResult {
+            switch result {
+            case let .success(latency, model):
+                Label(
+                    "连接成功 · \(model) · \(String(format: "%.0f ms", latency * 1000))",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.green)
+            case let .failure(message):
+                Label(message, systemImage: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 }
 
@@ -1454,6 +2413,7 @@ private func openApp(_ app: AppRecord) {
     NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
 }
 
+@MainActor
 private func uninstallConfirmationMessage(for app: AppRecord, viewModel: DashboardViewModel) -> String {
     let preview = viewModel.uninstallPreview(for: app)
     if let reason = preview.unavailableReason {

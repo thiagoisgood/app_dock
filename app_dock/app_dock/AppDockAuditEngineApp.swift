@@ -5,7 +5,7 @@ struct AppDockAuditEngineApp: App {
     @StateObject private var viewModel = DashboardViewModel()
 
     var body: some Scene {
-        WindowGroup("AppDock Audit") {
+        WindowGroup("App Dock") {
             DashboardView(viewModel: viewModel)
                 .task {
                     await viewModel.bootstrap()
